@@ -7,18 +7,22 @@
  *
  * Two judgement calls live here and are worth understanding before tuning:
  *
- *  - A CH47 is classified as an oil rig crate call purely by proximity to a
- *    rig monument. There is no flag in the API saying "heavy scientists were
- *    called"; the Chinook flying to a rig *is* the signal. Get the monument
- *    cache wrong and every map crossing becomes a false rig alert.
+ *  - A CH47 is classified as an oil rig delivery purely by proximity to a rig
+ *    monument, checked continuously for the Chinook's whole flight. There is no
+ *    flag in the API saying "heavy scientists were called"; the Chinook
+ *    reaching a rig *is* the signal. Get the monument cache wrong and every map
+ *    crossing becomes a false rig alert.
  *
  *  - A Patrol Helicopter that vanishes was either shot down or flew off the
- *    map edge. The API does not say which. An Explosion marker near its last
- *    known position is the only available evidence, so "downed" is a heuristic
- *    and can be fooled by a rocket landing nearby at the wrong moment.
+ *    map edge, and the API does not say which. It is inferred from *where* it
+ *    vanished: inland means destroyed, at the boundary means departed.
+ *
+ * Both are inferences, not facts the game reports. What the API genuinely
+ * cannot show at all — oil rig crates, locked crate drops, explosions, the
+ * Deep Sea zone — is documented in the README rather than guessed at here.
  */
 
-import { formatGridPosition, distance } from '../rustplus/grid.js';
+import { formatGridPosition, getCorrectedMapSize, distance } from '../rustplus/grid.js';
 import type { MonumentIndex } from '../rustplus/monuments.js';
 import { MarkerType, type RustMapMarker } from '../rustplus/types.js';
 import { EventStateStore, EventSubject, type EventSubjectValue } from './state.js';
@@ -64,8 +68,23 @@ export const OIL_RIG_CHINOOK_RADIUS = 300;
  * How long an Explosion stays relevant. The crash marker usually appears in
  * the same poll the heli disappears, but ordering is not guaranteed, so recent
  * explosions are remembered rather than only read from the current snapshot.
+ *
+ * Note that Explosion markers appear to have been removed from the companion
+ * API along with crate markers, so in practice this evidence is rarely if ever
+ * available — see the position heuristic below, which is the primary signal.
  */
 export const EXPLOSION_MEMORY_MS = 90_000;
+
+/**
+ * How close to the map edge a helicopter must vanish to count as having flown
+ * away rather than been destroyed.
+ *
+ * The Patrol Helicopter leaves by flying out over the boundary, so its last
+ * seen position is at or beyond the edge. One destroyed in a fight drops where
+ * it was fighting, which is inland. Roughly two grid cells of tolerance covers
+ * the gap between polls as it crosses out.
+ */
+export const HELI_EDGE_MARGIN = 300;
 
 interface TrackedMarker {
   marker: RustMapMarker;
@@ -173,6 +192,18 @@ export class EventDetector {
       const tracker: TrackedMarker = { marker, firstSeen: now, lastSeen: now };
       this.tracked.set(marker.id, tracker);
       events.push(...this.onAppeared(marker, tracker, now, markers));
+    }
+
+    /**
+     * An empty snapshot is a feed glitch, not the map emptying.
+     *
+     * A live server always has players and vending machines in the feed, so
+     * zero markers means the response was malformed or the server was
+     * mid-restart. Processing it as disappearances would report the helicopter
+     * as destroyed and the cargo as departed, all at once and all wrong.
+     */
+    if (markers.length === 0 && this.tracked.size > 0) {
+      return events;
     }
 
     for (const [id, tracker] of [...this.tracked]) {
@@ -430,7 +461,7 @@ export class EventDetector {
 
     switch (marker.type) {
       case MarkerType.PatrolHelicopter: {
-        const downed = this.wasDownedNear(marker.x, marker.y);
+        const downed = this.wasDowned(marker.x, marker.y);
         return [{ ...base, type: 'patrol_helicopter', phase: downed ? 'downed' : 'left_map' }];
       }
 
@@ -451,8 +482,26 @@ export class EventDetector {
     }
   }
 
-  /** True when a remembered explosion sits close to the given position. */
-  private wasDownedNear(x: number, y: number): boolean {
-    return this.explosions.some((e) => distance(x, y, e.x, e.y) <= this.heliDownedRadius);
+  /**
+   * Was the helicopter destroyed, or did it fly away?
+   *
+   * The API says neither, so this is inference from where it vanished. A heli
+   * leaves by flying out over the map boundary, so its last position is at or
+   * past the edge; one that is destroyed falls where it was fighting, inland.
+   *
+   * This replaced an explosion-marker check as the primary signal, because
+   * Explosion markers appear to have been removed from the companion API in
+   * the same change that removed crate markers — meaning the old logic could
+   * never fire and every downed heli was reported as having left. An explosion
+   * is still accepted as corroboration on the rare chance one shows up.
+   */
+  private wasDowned(x: number, y: number): boolean {
+    const nearExplosion = this.explosions.some((e) => distance(x, y, e.x, e.y) <= this.heliDownedRadius);
+    if (nearExplosion) return true;
+
+    const corrected = getCorrectedMapSize(this.mapSize);
+    const distanceToEdge = Math.min(x, y, corrected - x, corrected - y);
+
+    return distanceToEdge > HELI_EDGE_MARGIN;
   }
 }

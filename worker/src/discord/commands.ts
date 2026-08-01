@@ -24,6 +24,7 @@ import {
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { formatClock, formatDuration } from '../format/message.js';
+import { DEEP_SEA_OPEN_MS, parseDuration } from '../events/deepSea.js';
 import { logger } from '../logger.js';
 import type { BotContext } from './context.js';
 
@@ -64,9 +65,15 @@ export const commandDefinitions = [
     .toJSON(),
 
   new SlashCommandBuilder()
-    .setName('deepsea-opened')
-    .setDescription('Record that the Deep Sea zone just opened (it has no map marker to detect)')
+    .setName('deepsea')
+    .setDescription('Anchor the Deep Sea cycle (it has no map marker, so it must be told)')
     .setDefaultMemberPermissions(ADMIN_ONLY)
+    .addStringOption((option) =>
+      option
+        .setName('closes_in')
+        .setDescription('Countdown shown in game, e.g. "2h6m". Leave empty if it just opened.')
+        .setRequired(false),
+    )
     .toJSON(),
 
   new SlashCommandBuilder()
@@ -144,8 +151,8 @@ export async function handleCommand(
       return handleDisconnect(interaction, context);
     case 'setup':
       return handleSetup(interaction, context);
-    case 'deepsea-opened':
-      return handleDeepSeaOpened(interaction, context);
+    case 'deepsea':
+      return handleDeepSeaAnchor(interaction, context);
     default:
       await interaction.reply({ content: `Unknown command: ${interaction.commandName}`, ephemeral: true });
   }
@@ -252,23 +259,56 @@ async function handleDisconnect(interaction: ChatInputCommandInteraction, contex
   }
 }
 
-async function handleDeepSeaOpened(
+async function handleDeepSeaAnchor(
   interaction: ChatInputCommandInteraction,
   context: BotContext,
 ): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
 
+  const raw = interaction.options.getString('closes_in', false);
+
+  /**
+   * Prefer the in-game countdown over "it just opened".
+   *
+   * Anchoring on the open moment requires catching it exactly; being a few
+   * minutes late poisons every prediction afterwards with no way for the bot
+   * to detect the error. The countdown is displayed in game and can be read
+   * off at any point during the open window.
+   */
+  let closesInMs: number | null = null;
+  if (raw !== null) {
+    closesInMs = parseDuration(raw);
+    if (closesInMs === null) {
+      await interaction.editReply(
+        `❌ Could not read "${raw}" as a duration. Try \`2h6m\`, \`90m\` or \`45s\`.`,
+      );
+      return;
+    }
+    if (closesInMs > DEEP_SEA_OPEN_MS) {
+      await interaction.editReply(
+        `❌ ${formatDuration(closesInMs)} is longer than the whole open window (${formatDuration(DEEP_SEA_OPEN_MS)}). ` +
+          'If your server uses non-default `deepsea.wipeduration`, the cycle length needs changing in code.',
+      );
+      return;
+    }
+  }
+
   try {
-    const results = await context.recordDeepSeaOpened();
+    const results = await context.recordDeepSeaOpened(closesInMs);
     if (results.length === 0) {
       await interaction.editReply('❌ No connected server to anchor.');
       return;
     }
 
     const lines = results.map(
-      (r) => `✅ **${r.server}** — Deep Sea anchored as open now, closes in ~${formatDuration(r.closesInMs)}`,
+      (r) => `✅ **${r.server}** — Deep Sea closes in ~${formatDuration(r.closesInMs)}`,
     );
-    lines.push('', 'Use `!deepsea` in team chat to check it from now on.');
+    lines.push(
+      '',
+      raw === null
+        ? '⚠️ Anchored as opening *right now*. If it opened earlier, re-run with the countdown from the in-game map for an accurate cycle.'
+        : 'Anchored from the in-game countdown. Check with `!deepsea` in team chat.',
+    );
     await interaction.editReply(lines.join('\n'));
   } catch (error) {
     await interaction.editReply(`❌ ${error instanceof Error ? error.message : String(error)}`);

@@ -48,11 +48,18 @@ describe('priming', () => {
 });
 
 describe('patrol helicopter', () => {
+  /**
+   * A live feed always carries players and vending machines, so a snapshot is
+   * never truly empty. Including a filler keeps these fixtures realistic and
+   * avoids tripping the guard that treats an empty snapshot as a feed glitch.
+   */
+  const filler = () => marker(999, MarkerType.Player, 2000, 2000);
+
   it('reports entering the map', () => {
     const d = detector();
-    d.update([], t0);
+    d.update([filler()], t0);
 
-    const events = d.update([marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(5));
+    const events = d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(5));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: 'patrol_helicopter',
@@ -61,62 +68,67 @@ describe('patrol helicopter', () => {
     });
   });
 
-  it('reports leaving when it simply vanishes', () => {
+  it('reports downed when it vanishes inland', () => {
+    // Verified against a real event: a heli disappeared at R6, mid-map, and
+    // had in fact been shot down there. Explosion markers no longer exist in
+    // the feed, so position is the only available signal.
     const d = detector();
-    d.update([], t0);
-    d.update([marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(5));
+    d.update([filler()], t0);
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 2550, 3000)], at(5));
 
-    const events = d.update([], at(10));
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: 'patrol_helicopter', phase: 'left_map' });
-  });
-
-  it('reports downed when an explosion sits near its last position', () => {
-    const d = detector();
-    d.update([], t0);
-    d.update([marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(5));
-
-    // The crash marker typically appears in the same poll the heli vanishes.
-    const events = d.update([marker(11, MarkerType.Explosion, 3320, 3280)], at(10));
+    const events = d.update([filler()], at(10));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'patrol_helicopter', phase: 'downed' });
   });
 
-  it('does not call it downed for a distant explosion', () => {
+  it('reports leaving when it vanishes at the map edge', () => {
     const d = detector();
-    d.update([], t0);
-    d.update([marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(5));
+    d.update([filler()], t0);
+    // Just outside the grid, which is how a departing heli exits.
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 4100, 2000)], at(5));
 
-    const events = d.update([marker(11, MarkerType.Explosion, 500, 500)], at(10));
-    expect(events[0]).toMatchObject({ phase: 'left_map' });
+    const events = d.update([filler()], at(10));
+    expect(events[0]).toMatchObject({ type: 'patrol_helicopter', phase: 'left_map' });
   });
 
-  it('forgets explosions once they age out', () => {
-    const d = new EventDetector({
-      mapSize: MAP_SIZE,
-      monuments: new MonumentIndex([LARGE_RIG]),
-      explosionMemoryMs: 30_000,
-    });
-    d.update([], t0);
-    d.update(
-      [marker(10, MarkerType.PatrolHelicopter, 3300, 3300), marker(11, MarkerType.Explosion, 3310, 3310)],
-      at(5),
-    );
+  it('treats the edge margin as departure, not a kill', () => {
+    const d = detector();
+    d.update([filler()], t0);
+    // 100 units inside the boundary -- within the tolerance for crossing out.
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 100, 2000)], at(5));
 
-    // Explosion is now well outside the memory window, so the despawn a minute
-    // later must not be attributed to it.
-    const events = d.update([], at(120));
-    expect(events[0]).toMatchObject({ phase: 'left_map' });
+    expect(d.update([filler()], at(10))[0]).toMatchObject({ phase: 'left_map' });
+  });
+
+  it('still accepts an explosion as corroboration if one appears', () => {
+    const d = detector();
+    d.update([filler()], t0);
+    // Near the edge, so position alone would say "left".
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 100, 2000)], at(5));
+
+    const events = d.update([filler(), marker(11, MarkerType.Explosion, 120, 2010)], at(10));
+    expect(events[0]).toMatchObject({ phase: 'downed' });
   });
 
   it('uses the last known position, not the first', () => {
     const d = detector();
-    d.update([], t0);
-    d.update([marker(10, MarkerType.PatrolHelicopter, 500, 500)], at(5));
-    d.update([marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(10));
+    d.update([filler()], t0);
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 4100, 2000)], at(5));
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 3300, 3300)], at(10));
 
-    const events = d.update([], at(15));
-    expect(events[0]).toMatchObject({ grid: 'W4' });
+    const events = d.update([filler()], at(15));
+    expect(events[0]).toMatchObject({ grid: 'W4', phase: 'downed' });
+  });
+
+  it('ignores a snapshot that came back empty', () => {
+    // A momentary bad response must not report everything as destroyed.
+    const d = detector();
+    d.update([filler()], t0);
+    d.update([filler(), marker(10, MarkerType.PatrolHelicopter, 2550, 3000)], at(5));
+
+    expect(d.update([], at(10))).toEqual([]);
+    // The heli is still tracked, so a later genuine despawn still reports.
+    expect(d.update([filler()], at(15))[0]).toMatchObject({ phase: 'downed' });
   });
 });
 
@@ -213,10 +225,14 @@ describe('CH47 / oil rig', () => {
 
   it('announces departure for a crossing but not for a rig drop', () => {
     const d = detector();
-    d.update([], t0);
+    const filler = () => marker(999, MarkerType.Player, 2000, 2000);
+    d.update([filler()], t0);
 
-    d.update([marker(20, MarkerType.CH47, 2000, 2000), marker(21, MarkerType.CH47, 3300, 3300)], at(5));
-    const events = d.update([], at(10));
+    d.update(
+      [filler(), marker(20, MarkerType.CH47, 2000, 2000), marker(21, MarkerType.CH47, 3300, 3300)],
+      at(5),
+    );
+    const events = d.update([filler()], at(10));
 
     // The rig call already told the story; only the crossing reports leaving.
     expect(events).toHaveLength(1);
@@ -312,17 +328,18 @@ describe('crates', () => {
 describe('cargo ship', () => {
   it('reports entry and exit, including from outside the grid', () => {
     const d = detector();
-    d.update([], t0);
+    const filler = () => marker(999, MarkerType.Player, 2000, 2000);
+    d.update([filler()], t0);
 
     // Cargo spawns in the ocean margin, outside the grid system entirely.
-    const entered = d.update([marker(40, MarkerType.CargoShip, -400, 2000)], at(5));
+    const entered = d.update([filler(), marker(40, MarkerType.CargoShip, -400, 2000)], at(5));
     expect(entered[0]).toMatchObject({
       type: 'cargo_ship',
       phase: 'entered_map',
       grid: 'LEFT MIDDLE',
     });
 
-    const left = d.update([], at(10));
+    const left = d.update([filler()], at(10));
     expect(left[0]).toMatchObject({ type: 'cargo_ship', phase: 'left_map' });
   });
 });

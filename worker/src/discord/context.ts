@@ -46,12 +46,16 @@ export interface BotContext {
   setTeamChatChannel(channelId: string | null): Promise<void>;
 
   /**
-   * Record that the Deep Sea zone just opened.
+   * Anchor the Deep Sea cycle.
    *
    * Deep Sea has no Rust+ map marker — it is a zone, not an entity — so this
    * is the one piece of event state a human has to supply. It lives on an
    * admin Discord command rather than an in-game one so that status commands
    * stay strictly read-only.
+   *
+   * `closesInMs` is the countdown read off the in-game map, which is much more
+   * reliable than catching the exact moment the zone opens. Null means "it is
+   * opening right now".
    */
-  recordDeepSeaOpened(): Promise<{ server: string; closesInMs: number }[]>;
+  recordDeepSeaOpened(closesInMs: number | null): Promise<{ server: string; closesInMs: number }[]>;
 }

@@ -30,6 +30,47 @@ export interface DeepSeaAnchor {
   openedAt: Date;
 }
 
+/**
+ * Parse a duration like "2h6m", "90m", "1h", "45s".
+ *
+ * Used to anchor from the countdown the game displays, which is far more
+ * reliable than catching the exact moment the zone opens: anchoring on "it
+ * just opened" silently produces wrong predictions forever if the moment was
+ * missed by even a few minutes, and there is no way for the bot to notice.
+ */
+export function parseDuration(input: string): number | null {
+  const text = input.trim().toLowerCase();
+  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*([hms])/g)];
+
+  if (matches.length === 0) {
+    // A bare number is read as minutes, the unit people mean by default here.
+    // Empty input must not slip through as Number('') === 0.
+    if (!/^\d+(\.\d+)?$/.test(text)) return null;
+    return Number(text) * 60_000;
+  }
+
+  const unit = { h: 3_600_000, m: 60_000, s: 1000 } as const;
+  let total = 0;
+  for (const [, value, suffix] of matches) {
+    total += Number(value) * unit[suffix as keyof typeof unit];
+  }
+  return total;
+}
+
+/**
+ * Derive the open time from the in-game countdown to close.
+ *
+ * If the zone closes in `closesInMs` and stays open for `openMs`, then it
+ * opened `openMs - closesInMs` ago.
+ */
+export function anchorFromClosesIn(
+  closesInMs: number,
+  now: Date = new Date(),
+  openMs: number = DEEP_SEA_OPEN_MS,
+): DeepSeaAnchor {
+  return { openedAt: new Date(now.getTime() - (openMs - closesInMs)) };
+}
+
 export interface DeepSeaState {
   open: boolean;
   /** ms until it closes, when open. */
