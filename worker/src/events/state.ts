@@ -281,11 +281,15 @@ function describeOilRig(state: EventState, formatDuration: (ms: number) => strin
     }
 
     case 'triggered': {
+      const ago = rig.triggeredAt ? ` ${formatDuration(now.getTime() - rig.triggeredAt.getTime())} ago` : '';
       const remaining = rig.unlocksAt ? rig.unlocksAt.getTime() - now.getTime() : null;
-      if (remaining === null) return `${label}: Heavy Scientists called${at}`;
+
+      if (remaining === null) return `${label}: Heavy Scientists called${ago}${at}`;
       if (remaining > 0) {
-        return `${label}: Heavy Scientists called, crate unlocks in ${formatDuration(remaining)}${at}`;
+        return `${label}: Heavy Scientists called${ago}, crate unlocks in ${formatDuration(remaining)}${at}`;
       }
+      // The countdown elapsed but the timer has not fired yet (a restart, or a
+      // poll gap). Reporting it as still counting down would be wrong.
       return `${label}: crate UNLOCKED${at}`;
     }
 

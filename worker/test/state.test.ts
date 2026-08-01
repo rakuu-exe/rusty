@@ -149,7 +149,7 @@ describe('describeState', () => {
       'TOP RIGHT',
     );
     expect(render(store, EventSubject.LargeOilRig)).toBe(
-      'Large Oil Rig: Heavy Scientists called, crate unlocks in 10m @ TOP RIGHT',
+      'Large Oil Rig: Heavy Scientists called 5m ago, crate unlocks in 10m @ TOP RIGHT',
     );
   });
 
