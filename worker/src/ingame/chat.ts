@@ -140,36 +140,47 @@ export async function resolveInGameCommand(
 }
 
 /**
- * Handles team chat messages: resolves commands and sends replies.
- *
- * Loop prevention is by message content, not by sender.
+ * Remembers what the bot itself said in team chat.
  *
  * sendTeamMessage posts as the *paired player* — there is no separate bot
- * identity in Rust. So the bot's own replies arrive back carrying the paired
- * player's Steam ID, which is also the ID of the person most likely to be
- * typing commands. An earlier version ignored that ID outright, which silently
- * discarded every command the owner typed: `!large` did nothing at all.
+ * identity in Rust. So everything the bot says arrives back carrying the
+ * paired player's Steam ID, which is also the ID of the person most likely to
+ * be typing commands. An earlier version ignored that Steam ID outright, which
+ * silently discarded every command the owner typed: `!large` did nothing.
  *
- * Instead, replies the bot just sent are remembered briefly and skipped when
- * they echo back. Commands must start with the prefix and replies never do,
- * so this is belt-and-braces rather than the only defence.
+ * Matching on content instead lets the bot recognise its own echo without
+ * going deaf to the owner. Shared between command replies and event
+ * announcements so neither is mirrored back into Discord as if a player
+ * had typed it.
  */
-export class InGameChatHandler {
-  private lastReplyAt = 0;
-  private readonly recentReplies: string[] = [];
+export class SelfMessageTracker {
+  private readonly recent: string[] = [];
 
-  constructor(private readonly deps: InGameCommandDeps) {}
+  constructor(private readonly limit = 20) {}
 
-  private remember(reply: string): void {
-    this.recentReplies.push(reply);
-    // A handful is plenty; replies are answered one at a time behind a cooldown.
-    if (this.recentReplies.length > 5) this.recentReplies.shift();
+  remember(message: string): void {
+    this.recent.push(message.trim());
+    if (this.recent.length > this.limit) this.recent.shift();
   }
 
-  async handle(steamId: string, message: string): Promise<void> {
-    void steamId; // sender is deliberately not used -- see class comment
+  isSelf(message: string): boolean {
+    return this.recent.includes(message.trim());
+  }
+}
 
-    if (this.recentReplies.includes(message.trim())) return;
+/** Handles team chat messages: resolves commands and sends replies. */
+export class InGameChatHandler {
+  private lastReplyAt = 0;
+
+  constructor(
+    private readonly deps: InGameCommandDeps,
+    private readonly self: SelfMessageTracker,
+  ) {}
+
+  async handle(steamId: string, message: string): Promise<void> {
+    void steamId; // sender is deliberately not used -- see SelfMessageTracker
+
+    if (this.self.isSelf(message)) return;
 
     let reply: string | null;
     try {
@@ -189,7 +200,7 @@ export class InGameChatHandler {
     this.lastReplyAt = now;
 
     try {
-      this.remember(reply);
+      this.self.remember(reply);
       await this.deps.client.sendTeamMessage(reply);
       logger.info({ command: message.trim() }, 'answered in-game command');
     } catch (error) {

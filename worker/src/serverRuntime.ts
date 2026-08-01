@@ -19,8 +19,8 @@ import { CARGO_SHIP_EGRESS_MS, EventDetector } from './events/detector.js';
 import { MarkerPoller } from './events/poller.js';
 import { TimerScheduler } from './events/timers.js';
 import type { DetectedEvent } from './events/types.js';
-import { isHighSignal } from './format/message.js';
-import { InGameChatHandler } from './ingame/chat.js';
+import { formatEventLineInGame, isHighSignal } from './format/message.js';
+import { InGameChatHandler, SelfMessageTracker } from './ingame/chat.js';
 import { logger } from './logger.js';
 import { RustPlusClient } from './rustplus/client.js';
 import { formatGridPosition } from './rustplus/grid.js';
@@ -33,6 +33,8 @@ export interface ServerRuntimeOptions {
   bot: DiscordBot;
   pollIntervalMs: number;
   commandPrefix: string;
+  /** IANA timezone, used for the unlock time in in-game rig alerts. */
+  timezone: string;
   getEventChannelId: () => string | null;
   getTeamChatChannelId: () => string | null;
   useEmbeds: () => boolean;
@@ -43,6 +45,7 @@ export class ServerRuntime {
   private readonly timers: TimerScheduler;
   private poller: MarkerPoller | null = null;
   private chat: InGameChatHandler | null = null;
+  private readonly selfMessages = new SelfMessageTracker();
   private mapSize: number | null = null;
   private lastInfo: { players: number; maxPlayers: number } | null = null;
 
@@ -128,11 +131,10 @@ export class ServerRuntime {
       // still fires, and is not re-armed by the first snapshot.
       await this.timers.rehydrate();
 
-      this.chat = new InGameChatHandler({
-        serverId: row.id,
-        client: this.client,
-        prefix: this.options.commandPrefix,
-      });
+      this.chat = new InGameChatHandler(
+        { serverId: row.id, client: this.client, prefix: this.options.commandPrefix },
+        this.selfMessages,
+      );
 
       this.poller?.stop();
       this.poller = new MarkerPoller(this.client, detector, this.options.pollIntervalMs);
@@ -222,15 +224,46 @@ export class ServerRuntime {
     if (!isHighSignal(event.type, event.phase)) return;
 
     const channel = this.options.getEventChannelId();
-    if (!channel) {
+    if (channel) {
+      await this.options.bot.postEvent(channel, event, this.options.useEmbeds());
+    } else {
       logger.warn('no event channel configured; run /setup');
-      return;
     }
 
-    await this.options.bot.postEvent(channel, event, this.options.useEmbeds());
+    await this.announceInGame(event);
+  }
+
+  /**
+   * Mirror the alert into Rust team chat.
+   *
+   * Uses the compact wording rather than the Discord line, which is too long
+   * for a chat message read mid-fight. Failures are logged and swallowed: the
+   * Discord alert is the primary channel, and a team chat hiccup (server
+   * restarting, rate limit) must not lose the event.
+   */
+  private async announceInGame(event: DetectedEvent): Promise<void> {
+    if (!this.client.isConnected) return;
+
+    const line = formatEventLineInGame(event, { timezone: this.options.timezone });
+
+    try {
+      // Remember before sending: the echo can arrive before the await resolves.
+      this.selfMessages.remember(line);
+      await this.client.sendTeamMessage(line);
+    } catch (error) {
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error), event: event.type },
+        'failed to announce event in game',
+      );
+    }
   }
 
   private async onTeamMessage(steamId: string, name: string, message: string): Promise<void> {
+    // The bot's own alerts and replies come back over team chat under the
+    // paired player's name. Mirroring those to Discord would duplicate every
+    // alert into the chat channel, so drop them here.
+    if (this.selfMessages.isSelf(message)) return;
+
     // Logged so it is possible to tell "the bot never heard you" (nothing here,
     // usually because the message went to global chat, or you are not in a
     // team) apart from "it heard you but did not answer".

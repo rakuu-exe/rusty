@@ -122,6 +122,7 @@ export class App implements BotContext {
       bot: this.bot,
       pollIntervalMs: this.config.POLL_INTERVAL_MS,
       commandPrefix: this.guildConfig?.command_prefix ?? this.config.INGAME_COMMAND_PREFIX,
+      timezone: this.timezone,
       getEventChannelId: () => this.guildConfig?.event_channel_id ?? null,
       getTeamChatChannelId: () => this.guildConfig?.team_chat_channel_id ?? null,
       useEmbeds: () => this.guildConfig?.use_embeds ?? true,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InGameChatHandler, resolveInGameCommand } from '../src/ingame/chat.js';
+import { InGameChatHandler, SelfMessageTracker, resolveInGameCommand } from '../src/ingame/chat.js';
 import type { RustPlusClient } from '../src/rustplus/client.js';
 
 vi.mock('../src/db.js', () => ({
@@ -58,7 +58,7 @@ describe('InGameChatHandler', () => {
     // loop guard keyed on that Steam ID silently dropped every command the
     // owner typed -- "!large" did nothing at all.
     const client = fakeClient();
-    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' });
+    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' }, new SelfMessageTracker());
 
     await handler.handle(PAIRED_STEAM_ID, '!large');
 
@@ -68,7 +68,7 @@ describe('InGameChatHandler', () => {
 
   it('does not answer its own reply echoing back', async () => {
     const client = fakeClient();
-    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' });
+    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' }, new SelfMessageTracker());
 
     await handler.handle(PAIRED_STEAM_ID, '!large');
     const reply = client.sent[0]!;
@@ -81,7 +81,7 @@ describe('InGameChatHandler', () => {
 
   it('rate limits bursts', async () => {
     const client = fakeClient();
-    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' });
+    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' }, new SelfMessageTracker());
 
     await handler.handle(PAIRED_STEAM_ID, '!large');
     await handler.handle(PAIRED_STEAM_ID, '!small');
@@ -94,7 +94,7 @@ describe('InGameChatHandler', () => {
 
   it('stays silent for non-commands', async () => {
     const client = fakeClient();
-    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' });
+    const handler = new InGameChatHandler({ serverId: 's1', client, prefix: '!' }, new SelfMessageTracker());
 
     await handler.handle(PAIRED_STEAM_ID, 'anyone got scrap');
 

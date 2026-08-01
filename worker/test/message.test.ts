@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatClock, formatDuration, formatEventLine, isHighSignal } from '../src/format/message.js';
+import { formatClock, formatDuration, formatEventLine, formatEventLineInGame, isHighSignal } from '../src/format/message.js';
 import type { DetectedEvent } from '../src/events/types.js';
 
 const options = { timezone: 'UTC' };
@@ -143,5 +143,53 @@ describe('isHighSignal', () => {
     expect(isHighSignal('oil_rig_crate', 'called')).toBe(true);
     expect(isHighSignal('oil_rig_crate', 'unlocked')).toBe(true);
     expect(isHighSignal('locked_crate', 'dropped')).toBe(true);
+  });
+});
+
+describe('formatEventLineInGame', () => {
+  const inGame = (partial: Partial<DetectedEvent>) => formatEventLineInGame(event(partial), options);
+
+  it('is short enough for a Rust chat line', () => {
+    // The Discord form shouts in caps with a wall-clock time; in game the
+    // message arrives as it happens, so "when" is redundant.
+    expect(inGame({ type: 'cargo_ship', phase: 'left_map', grid: 'DEEP SEA, BOTTOM RIGHT' })).toBe(
+      'Cargo left @ DEEP SEA, BOTTOM RIGHT',
+    );
+    expect(inGame({ type: 'cargo_ship', phase: 'entered_map', grid: 'DEEP SEA, BOTTOM RIGHT' })).toBe(
+      'Cargo spawned @ DEEP SEA, BOTTOM RIGHT',
+    );
+  });
+
+  it('keeps the unlock time, which is the point of a rig alert', () => {
+    expect(
+      inGame({
+        type: 'oil_rig_crate',
+        phase: 'called',
+        monument: 'Large Oil Rig',
+        grid: 'TOP RIGHT',
+        opensAt: new Date('2026-08-01T14:56:00Z'),
+      }),
+    ).toBe('Large Oil Rig crate called @ TOP RIGHT, opens 14:56');
+  });
+
+  it('covers the remaining events', () => {
+    expect(inGame({})).toBe('Heli entered @ W4');
+    expect(inGame({ phase: 'downed' })).toBe('Heli DOWNED @ W4');
+    expect(inGame({ type: 'ch47', phase: 'entered_map', grid: 'P7' })).toBe('Chinook entered @ P7');
+    expect(inGame({ type: 'oil_rig_crate', phase: 'unlocked', monument: 'Small Oil Rig', grid: 'A0' })).toBe(
+      'Small Oil Rig crate OPEN @ A0',
+    );
+    expect(inGame({ type: 'locked_crate', phase: 'dropped', monument: 'Launch Site', grid: 'D12' })).toBe(
+      'Locked crate dropped at Launch Site @ D12',
+    );
+  });
+
+  it('stays well under a chat line for every event', () => {
+    const cases: Partial<DetectedEvent>[] = [
+      { type: 'oil_rig_crate', phase: 'called', monument: 'Large Oil Rig', grid: 'TOP RIGHT', opensAt: new Date() },
+      { type: 'locked_crate', phase: 'dropped', monument: 'Water Treatment Plant', grid: 'AA26' },
+      { type: 'cargo_ship', phase: 'entered_map', grid: 'DEEP SEA, BOTTOM RIGHT' },
+    ];
+    for (const c of cases) expect(inGame(c).length).toBeLessThan(80);
   });
 });

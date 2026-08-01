@@ -87,6 +87,45 @@ export function formatEventLine(event: DetectedEvent, options: FormatOptions): s
   return parts.join(' ');
 }
 
+/**
+ * Compact form for in-game team chat.
+ *
+ * Rust chat lines are short and read in a firefight, so this drops the
+ * shouted caps and the wall-clock time that Discord shows — the message is
+ * arriving as it happens, so "when" is now. The one time that survives is a
+ * rig crate's unlock, which is the whole point of that alert.
+ */
+export function formatEventLineInGame(event: DetectedEvent, options: FormatOptions): string {
+  const at = `@ ${event.grid}`;
+
+  switch (event.type) {
+    case 'patrol_helicopter':
+      if (event.phase === 'entered_map') return `Heli entered ${at}`;
+      if (event.phase === 'downed') return `Heli DOWNED ${at}`;
+      return `Heli left ${at}`;
+
+    case 'cargo_ship':
+      if (event.phase === 'entered_map') return `Cargo spawned ${at}`;
+      if (event.phase === 'egress') return `Cargo leaving ${at}`;
+      return `Cargo left ${at}`;
+
+    case 'ch47':
+      return event.phase === 'entered_map' ? `Chinook entered ${at}` : `Chinook left ${at}`;
+
+    case 'oil_rig_crate': {
+      const rig = event.monument ?? 'Oil Rig';
+      if (event.phase === 'called') {
+        const opens = event.opensAt ? `, opens ${formatClock(event.opensAt, options.timezone)}` : '';
+        return `${rig} crate called ${at}${opens}`;
+      }
+      return `${rig} crate OPEN ${at}`;
+    }
+
+    case 'locked_crate':
+      return event.monument ? `Locked crate dropped at ${event.monument} ${at}` : `Locked crate dropped ${at}`;
+  }
+}
+
 /** Colour-coded accent per event type, for Discord embeds. */
 export function eventColor(event: DetectedEvent): number {
   switch (event.type) {
