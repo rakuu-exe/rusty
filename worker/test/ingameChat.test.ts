@@ -39,12 +39,12 @@ describe('resolveInGameCommand', () => {
   });
 
   it('answers a known command even with no history recorded', async () => {
-    expect(await resolveInGameCommand('!large', deps)).toBe('Large Oil Rig: no crate called this wipe');
-    expect(await resolveInGameCommand('!heli', deps)).toBe('Heli: nothing recorded this wipe');
+    expect(await resolveInGameCommand('!large', deps)).toBe('Large Oil Rig: no crate called yet');
+    expect(await resolveInGameCommand('!heli', deps)).toBe('Heli: nothing seen yet');
   });
 
   it('is case insensitive and tolerates surrounding whitespace', async () => {
-    expect(await resolveInGameCommand('  !LARGE  ', deps)).toBe('Large Oil Rig: no crate called this wipe');
+    expect(await resolveInGameCommand('  !LARGE  ', deps)).toBe('Large Oil Rig: no crate called yet');
   });
 
   it('answers live-state commands from the server', async () => {

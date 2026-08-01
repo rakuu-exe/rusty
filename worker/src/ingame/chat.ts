@@ -26,9 +26,16 @@ export interface InGameCommandDeps {
   prefix: string;
 }
 
-/** Describes when something last happened, or says it hasn't. */
+/**
+ * Describes when something last happened, or says it hasn't.
+ *
+ * "yet" rather than "this wipe": the bot only knows what it observed while
+ * connected. It cannot see events from before it started, so claiming nothing
+ * happened all wipe would be an overstatement — it may simply not have been
+ * watching.
+ */
 function since(row: EventLogRow | null, label: string, now = Date.now()): string {
-  if (!row) return `${label}: nothing recorded this wipe`;
+  if (!row) return `${label}: nothing seen yet`;
 
   const ago = formatDuration(now - new Date(row.created_at).getTime());
   const where = row.grid ? ` @ ${row.grid}` : '';
@@ -42,7 +49,7 @@ async function describeEvent(serverId: string, eventType: string, label: string)
 /** Oil rig answers include the unlock time, which is the point of asking. */
 async function describeOilRig(serverId: string, label: string): Promise<string> {
   const called = await getLastOilRigEvent(serverId, label, 'called');
-  if (!called) return `${label}: no crate called this wipe`;
+  if (!called) return `${label}: no crate called yet`;
 
   const ago = formatDuration(Date.now() - new Date(called.created_at).getTime());
   const where = called.grid ? ` @ ${called.grid}` : '';

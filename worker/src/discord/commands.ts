@@ -15,6 +15,7 @@ import {
   ChannelType,
   EmbedBuilder,
   ModalBuilder,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -30,12 +31,24 @@ export const PAIRING_MODAL_ID = 'rust-pairing-credentials';
 export const PAIRING_INPUT_ID = 'credentials-json';
 export const PAIRING_BUTTON_ID = 'rust-pairing-submit';
 
+/**
+ * Commands that change what the bot is connected to, or expose credentials.
+ *
+ * Restricted to Manage Server, so ordinary members cannot unpair the server,
+ * redirect alerts, or start a pairing flow. Discord enforces this itself and
+ * hides the commands from anyone without the permission, which is stronger
+ * than checking inside the handler.
+ */
+const ADMIN_ONLY = PermissionFlagsBits.ManageGuild;
+
 export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName('connect')
     .setDescription('Link the bot to a Rust server via Rust+ pairing')
+    .setDefaultMemberPermissions(ADMIN_ONLY)
     .toJSON(),
 
+  // Read-only, so everyone can check whether the bot is alive.
   new SlashCommandBuilder()
     .setName('status')
     .setDescription('Show Rust+ connection status and pending event timers')
@@ -44,6 +57,7 @@ export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName('disconnect')
     .setDescription('Stop tracking a paired Rust server')
+    .setDefaultMemberPermissions(ADMIN_ONLY)
     .addStringOption((option) =>
       option.setName('server').setDescription('Server id (see /status)').setRequired(true),
     )
@@ -52,6 +66,7 @@ export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName('setup')
     .setDescription('Choose which channels the bot posts to')
+    .setDefaultMemberPermissions(ADMIN_ONLY)
     .addChannelOption((option) =>
       option
         .setName('events')
