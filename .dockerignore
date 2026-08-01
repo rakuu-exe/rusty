@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+
+# Never let credentials into an image layer
+**/rustplus.config.json
+**/*.credentials.json
+
+**/test
+**/*.test.ts
+**/.git
+**/*.log
+supabase
+README.md

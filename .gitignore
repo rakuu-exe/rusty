@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+
+# Secrets -- never commit
+.env
+.env.local
+worker/.env
+rustplus.config.json
+*.credentials.json
+
+# Captured live marker payloads may contain player positions/steam ids
+worker/test/fixtures/*.live.json

@@ -1,0 +1,37 @@
+{
+  "name": "rust-event-bot-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Always-on worker holding the Discord gateway and Rust+ WebSocket connections",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "postinstall": "node scripts/patch-proto.mjs",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "start:tsx": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "register-commands": "tsx src/discord/registerCommands.ts",
+    "fcm-register": "node scripts/fcm-register.mjs"
+  },
+  "dependencies": {
+    "@liamcottle/push-receiver": "^0.0.4",
+    "@liamcottle/rustplus.js": "^2.5.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "discord.js": "^14.16.0",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.2.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
