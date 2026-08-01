@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { EventStateStore, EventSubject, describeState } from '../src/events/state.js';
-import { formatDuration } from '../src/format/message.js';
+import { formatClock, formatDuration } from '../src/format/message.js';
+
+const fmt = { duration: formatDuration, clock: (d: Date) => formatClock(d, 'UTC') };
 
 const now = new Date('2026-08-01T12:00:00Z');
 const minutesAgo = (m: number) => new Date(now.getTime() - m * 60_000);
@@ -118,7 +120,7 @@ describe('oil rig lifecycle', () => {
 
 describe('describeState', () => {
   const render = (store: EventStateStore, subject: Parameters<EventStateStore['get']>[0]) =>
-    describeState(store.get(subject), formatDuration, now);
+    describeState(store.get(subject), fmt, now);
 
   it('says plainly when nothing is known', () => {
     expect(render(new EventStateStore(), EventSubject.PatrolHelicopter)).toBe(
@@ -134,10 +136,37 @@ describe('describeState', () => {
     );
   });
 
-  it('gives an age for an observed spawn', () => {
+  it('gives cargo a spawn clock time, current location and egress countdown', () => {
+    // Cargo has a known 50 minute lifespan, so "how long is left" is the
+    // useful question, and the grid is refreshed on every poll as it sails.
     const store = new EventStateStore();
     store.markSpawned(EventSubject.CargoShip, minutesAgo(12), 'P14');
-    expect(render(store, EventSubject.CargoShip)).toBe('Cargo Ship: ACTIVE @ P14 (12m ago)');
+    expect(render(store, EventSubject.CargoShip)).toBe(
+      'Cargo Ship: ACTIVE @ P14 — spawned 11:48 (12m ago), egress in 38m',
+    );
+  });
+
+  it('says egress has started once cargo is past its window', () => {
+    const store = new EventStateStore();
+    store.markSpawned(EventSubject.CargoShip, minutesAgo(58), 'AA20');
+    expect(render(store, EventSubject.CargoShip)).toBe(
+      'Cargo Ship: ACTIVE @ AA20 — spawned 11:02 (58m ago), egress started 8m ago',
+    );
+  });
+
+  it('follows cargo as it moves', () => {
+    const store = new EventStateStore();
+    store.markSpawned(EventSubject.CargoShip, minutesAgo(12), 'BOTTOM RIGHT');
+    store.markSeen(EventSubject.CargoShip, minutesAgo(1), 'P14');
+    expect(render(store, EventSubject.CargoShip)).toContain('@ P14');
+  });
+
+  it('gives a spawn time for other events without an egress clause', () => {
+    const store = new EventStateStore();
+    store.markSpawned(EventSubject.PatrolHelicopter, minutesAgo(5), 'D18');
+    expect(render(store, EventSubject.PatrolHelicopter)).toBe(
+      'Patrol Helicopter: ACTIVE @ D18 — spawned 11:55 (5m ago)',
+    );
   });
 
   it('counts down an armed rig crate', () => {

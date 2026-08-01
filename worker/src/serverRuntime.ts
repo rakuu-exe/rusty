@@ -151,6 +151,7 @@ export class ServerRuntime {
           serverId: row.id,
           client: this.client,
           prefix: this.options.commandPrefix,
+          timezone: this.options.timezone,
           // Commands read these and never write to them.
           state: detector.state,
           getDeepSeaAnchor: () => (this.deepSeaAnchor ? { openedAt: this.deepSeaAnchor } : null),

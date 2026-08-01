@@ -10,7 +10,9 @@
 import { describe, expect, it } from 'vitest';
 import { EventDetector, OIL_RIG_CRATE_UNLOCK_MS } from '../src/events/detector.js';
 import { EventSubject, describeState } from '../src/events/state.js';
-import { formatDuration, formatEventLine, formatEventLineInGame, isHighSignal } from '../src/format/message.js';
+import { formatClock, formatDuration, formatEventLine, formatEventLineInGame, isHighSignal } from '../src/format/message.js';
+
+const fmt = { duration: formatDuration, clock: (d: Date) => formatClock(d, 'UTC') };
 import { MonumentIndex } from '../src/rustplus/monuments.js';
 import { MarkerType, type RustMapMarker } from '../src/rustplus/types.js';
 
@@ -43,7 +45,7 @@ describe('a real Large Oil Rig delivery, start to finish', () => {
 
     // 1. Bot connects. Nothing is announced for what is already there.
     expect(d.update([filler()], t0)).toEqual([]);
-    expect(describeState(d.state.get(EventSubject.LargeOilRig), formatDuration, t0)).toBe(
+    expect(describeState(d.state.get(EventSubject.LargeOilRig), fmt, t0)).toBe(
       'Large Oil Rig: no Heavy Scientists called this session',
     );
 
@@ -83,12 +85,12 @@ describe('a real Large Oil Rig delivery, start to finish', () => {
 
     // 6. !large now counts down, which is the whole point.
     const fourMinutesLater = new Date(at(35).getTime() + 4 * 60_000);
-    expect(describeState(d.state.get(EventSubject.LargeOilRig), formatDuration, fourMinutesLater)).toBe(
+    expect(describeState(d.state.get(EventSubject.LargeOilRig), fmt, fourMinutesLater)).toBe(
       'Large Oil Rig: Heavy Scientists called 4m ago, crate unlocks in 11m @ TOP RIGHT',
     );
 
     // 7. Small Oil Rig is entirely untouched by this.
-    expect(describeState(d.state.get(EventSubject.SmallOilRig), formatDuration, fourMinutesLater)).toBe(
+    expect(describeState(d.state.get(EventSubject.SmallOilRig), fmt, fourMinutesLater)).toBe(
       'Small Oil Rig: no Heavy Scientists called this session',
     );
 
@@ -102,7 +104,7 @@ describe('a real Large Oil Rig delivery, start to finish', () => {
     d.state.markOilRigUnlocked(EventSubject.LargeOilRig, unlockAt);
 
     const afterUnlock = new Date(unlockAt.getTime() + 3 * 60_000);
-    expect(describeState(d.state.get(EventSubject.LargeOilRig), formatDuration, afterUnlock)).toBe(
+    expect(describeState(d.state.get(EventSubject.LargeOilRig), fmt, afterUnlock)).toBe(
       'Large Oil Rig: crate UNLOCKED @ TOP RIGHT (called 18m ago)',
     );
   });
@@ -155,7 +157,7 @@ describe('a real Large Oil Rig delivery, start to finish', () => {
     d.update([filler(), marker(20, MarkerType.CH47, 3290, 4320)], at(10));
 
     const wellPast = new Date(at(10).getTime() + OIL_RIG_CRATE_UNLOCK_MS + 5 * 60_000);
-    expect(describeState(d.state.get(EventSubject.LargeOilRig), formatDuration, wellPast)).toBe(
+    expect(describeState(d.state.get(EventSubject.LargeOilRig), fmt, wellPast)).toBe(
       'Large Oil Rig: crate UNLOCKED @ TOP RIGHT',
     );
   });

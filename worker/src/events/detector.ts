@@ -29,14 +29,12 @@
 import { formatGridPosition, getCorrectedMapSize, distance } from '../rustplus/grid.js';
 import type { MonumentIndex } from '../rustplus/monuments.js';
 import { MarkerType, type RustMapMarker } from '../rustplus/types.js';
+import { OIL_RIG_CRATE_UNLOCK_MS } from './constants.js';
 import { EventStateStore, EventSubject, type EventSubjectValue } from './state.js';
 import type { DetectedEvent } from './types.js';
 
-/** Locked crate at an oil rig unlocks 15 minutes after heavy scientists land. */
-export const OIL_RIG_CRATE_UNLOCK_MS = 15 * 60 * 1000;
-
-/** Cargo Ship begins leaving the map 50 minutes after it spawns. */
-export const CARGO_SHIP_EGRESS_MS = 50 * 60 * 1000;
+// Re-exported so existing callers keep a single import site for detection.
+export { OIL_RIG_CRATE_UNLOCK_MS, CARGO_SHIP_EGRESS_MS } from './constants.js';
 
 /**
  * How close an Explosion must be to the helicopter's last position to count as

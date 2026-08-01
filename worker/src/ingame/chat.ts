@@ -16,7 +16,7 @@
  * will be — this is a Facepunch limitation, not something to engineer around.
  */
 
-import { formatDuration } from '../format/message.js';
+import { formatClock, formatDuration } from '../format/message.js';
 import { EventSubject, describeState, type EventStateStore } from '../events/state.js';
 import { deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
 import { logger } from '../logger.js';
@@ -31,6 +31,8 @@ export interface InGameCommandDeps {
   prefix: string;
   /** Read-only from here. Commands must not mutate session state. */
   state: EventStateStore;
+  /** IANA timezone for rendering spawn times. */
+  timezone?: string;
   /** Supplies the Deep Sea anchor, if one has been recorded. */
   getDeepSeaAnchor?: () => DeepSeaAnchor | null;
 }
@@ -74,8 +76,13 @@ export async function resolveInGameCommand(
   if (!rawCommand) return null;
 
   const { client, state } = deps;
+  const timezone = deps.timezone ?? 'UTC';
+  const formatters = {
+    duration: formatDuration,
+    clock: (date: Date) => formatClock(date, timezone),
+  };
   const status = (subject: Parameters<EventStateStore['get']>[0]) =>
-    describeState(state.get(subject), formatDuration);
+    describeState(state.get(subject), formatters);
 
   switch (rawCommand) {
     // ---- event status, all pure reads -------------------------------------
@@ -118,7 +125,7 @@ export async function resolveInGameCommand(
         EventSubject.MonumentChinook,
         EventSubject.TravellingVendor,
       ];
-      return subjects.map((s) => describeState(state.get(s), formatDuration)).join(' | ');
+      return subjects.map((s) => describeState(state.get(s), formatters)).join(' | ');
     }
 
     // ---- live server queries, still read-only ------------------------------

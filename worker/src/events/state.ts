@@ -1,3 +1,5 @@
+import { CARGO_SHIP_EGRESS_MS } from './constants.js';
+
 /**
  * Session state for every tracked event.
  *
@@ -218,20 +220,28 @@ export class EventStateStore {
 // ---------------------------------------------------------------------------
 
 /**
- * One-line status for team chat.
+ * Formatters injected by the caller.
  *
- * `formatDuration` is injected rather than imported to keep this module free
- * of dependencies on the Discord-facing formatter.
+ * Kept as parameters rather than imports so this module stays free of any
+ * dependency on the Discord-facing formatter, and so the clock can render in
+ * the configured timezone without this module knowing about configuration.
  */
+export interface StateFormatters {
+  duration: (ms: number) => string;
+  /** Renders a wall-clock time, e.g. "22:08". */
+  clock: (date: Date) => string;
+}
+
+/** One-line status for team chat. */
 export function describeState(
   state: EventState,
-  formatDuration: (ms: number) => string,
+  formatters: StateFormatters,
   now: Date = new Date(),
 ): string {
   const label = state.label;
   const at = state.grid ? ` @ ${state.grid}` : '';
 
-  if (state.oilRig) return describeOilRig(state, formatDuration, now);
+  if (state.oilRig) return describeOilRig(state, formatters, now);
 
   switch (state.state) {
     case 'unknown':
@@ -242,18 +252,42 @@ export function describeState(
       return `${label}: ACTIVE${at} — detected after startup, spawn time unknown`;
 
     case 'active': {
-      const since = state.startedAt ? ` (${formatDuration(now.getTime() - state.startedAt.getTime())} ago)` : '';
-      return `${label}: ACTIVE${at}${since}`;
+      const parts: string[] = [];
+
+      if (state.startedAt) {
+        // Both forms: the clock time answers "when did it spawn", the elapsed
+        // time answers "how long has it been up". People ask for both.
+        parts.push(
+          `spawned ${formatters.clock(state.startedAt)} (${formatters.duration(now.getTime() - state.startedAt.getTime())} ago)`,
+        );
+
+        // Cargo is the one thing with a known lifespan, so the useful question
+        // is how long is left rather than how long it has been here.
+        if (state.subject === EventSubject.CargoShip) {
+          const egressAt = new Date(state.startedAt.getTime() + CARGO_SHIP_EGRESS_MS);
+          const remaining = egressAt.getTime() - now.getTime();
+          parts.push(
+            remaining > 0
+              ? `egress in ${formatters.duration(remaining)}`
+              : `egress started ${formatters.duration(-remaining)} ago`,
+          );
+        }
+      }
+
+      return parts.length > 0 ? `${label}: ACTIVE${at} — ${parts.join(', ')}` : `${label}: ACTIVE${at}`;
     }
 
     case 'completed': {
-      const ended = state.endedAt ? formatDuration(now.getTime() - state.endedAt.getTime()) : null;
-      return ended ? `${label}: ended ${ended} ago${at}` : `${label}: not currently active${at}`;
+      const ended = state.endedAt
+        ? `${formatters.duration(now.getTime() - state.endedAt.getTime())} ago at ${formatters.clock(state.endedAt)}`
+        : null;
+      return ended ? `${label}: ended ${ended}${at}` : `${label}: not currently active${at}`;
     }
   }
 }
 
-function describeOilRig(state: EventState, formatDuration: (ms: number) => string, now: Date): string {
+function describeOilRig(state: EventState, formatters: StateFormatters, now: Date): string {
+  const formatDuration = formatters.duration;
   const rig = state.oilRig!;
   const label = state.label;
   const at = state.grid ? ` @ ${state.grid}` : '';
