@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatClock, formatDuration, formatEventLine } from '../src/format/message.js';
+import { formatClock, formatDuration, formatEventLine, isHighSignal } from '../src/format/message.js';
 import type { DetectedEvent } from '../src/events/types.js';
 
 const options = { timezone: 'UTC' };
@@ -125,5 +125,23 @@ describe('formatDuration', () => {
 
   it('clamps negatives to zero rather than rendering nonsense', () => {
     expect(formatDuration(-5000)).toBe('0s');
+  });
+});
+
+describe('isHighSignal', () => {
+  it('announces everything except a Chinook leaving', () => {
+    // A Chinook entering means a locked crate is inbound -- suppressing it
+    // meant a real detected event produced no alert at all.
+    expect(isHighSignal('ch47', 'entered_map')).toBe(true);
+    expect(isHighSignal('ch47', 'left_map')).toBe(false);
+
+    expect(isHighSignal('patrol_helicopter', 'entered_map')).toBe(true);
+    expect(isHighSignal('patrol_helicopter', 'downed')).toBe(true);
+    expect(isHighSignal('patrol_helicopter', 'left_map')).toBe(true);
+    expect(isHighSignal('cargo_ship', 'entered_map')).toBe(true);
+    expect(isHighSignal('cargo_ship', 'egress')).toBe(true);
+    expect(isHighSignal('oil_rig_crate', 'called')).toBe(true);
+    expect(isHighSignal('oil_rig_crate', 'unlocked')).toBe(true);
+    expect(isHighSignal('locked_crate', 'dropped')).toBe(true);
   });
 });

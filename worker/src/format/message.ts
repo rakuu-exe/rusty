@@ -121,10 +121,16 @@ export function eventEmoji(event: DetectedEvent): string {
 /**
  * Whether an event is worth announcing at all.
  *
- * Departures are logged for "!heli"-style queries but are mostly noise in a
- * busy channel, so callers can filter on this rather than hard-coding a list.
+ * Everything is recorded to event_log regardless, so the in-game "!heli" style
+ * commands can still answer for suppressed events. This only decides what
+ * reaches the Discord channel.
+ *
+ * Only one thing is suppressed: a Chinook leaving. Its arrival already told
+ * the story, and by the time it departs the crate it dropped is what matters.
+ * An earlier version also suppressed Chinook *arrivals* and all departures,
+ * which was wrong -- a Chinook entering means a locked crate is inbound, and a
+ * helicopter or cargo leaving is exactly the kind of thing people ask about.
  */
 export function isHighSignal(type: RustEventType, phase: RustEventPhase): boolean {
-  if (phase === 'left_map') return false;
-  return !(type === 'ch47' && phase === 'entered_map');
+  return !(type === 'ch47' && phase === 'left_map');
 }
