@@ -260,7 +260,19 @@ function describeOilRig(state: EventState, formatDuration: (ms: number) => strin
 
   switch (rig.phase) {
     case 'unknown':
-      return `${label}: not observed this session`;
+      /**
+       * Deliberately specific about what is being reported.
+       *
+       * Rust+ does not publish a marker for the crate sitting on an oil rig —
+       * verified against a live server, where the feed contained no Crate
+       * markers at all while crates were plainly visible in game. So the bot
+       * cannot see a rig become available; the only rig event it can observe
+       * is a Chinook arriving with Heavy Scientists.
+       *
+       * Saying "not observed this session" would imply the bot is watching
+       * for something it can never see.
+       */
+      return `${label}: no Heavy Scientists called this session`;
 
     case 'available': {
       const detected =
@@ -277,8 +289,12 @@ function describeOilRig(state: EventState, formatDuration: (ms: number) => strin
       return `${label}: crate UNLOCKED${at}`;
     }
 
-    case 'unlocked':
-      return `${label}: crate UNLOCKED${at}`;
+    case 'unlocked': {
+      const since = rig.triggeredAt
+        ? ` (called ${formatDuration(now.getTime() - rig.triggeredAt.getTime())} ago)`
+        : '';
+      return `${label}: crate UNLOCKED${at}${since}`;
+    }
 
     case 'completed': {
       const ended = state.endedAt ? formatDuration(now.getTime() - state.endedAt.getTime()) : null;

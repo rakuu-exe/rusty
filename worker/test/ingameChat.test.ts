@@ -44,13 +44,25 @@ describe('commands are read-only', () => {
     for (const [command, label] of [
       ['heli', 'Patrol Helicopter'],
       ['cargo', 'Cargo Ship'],
-      ['large', 'Large Oil Rig'],
-      ['small', 'Small Oil Rig'],
       ['chinook', 'Chinook'],
       ['vendor', 'Travelling Vendor'],
     ] as const) {
       const reply = await resolveInGameCommand(`!${command}`, deps());
       expect(reply, command).toBe(`${label}: not observed this session`);
+    }
+  });
+
+  it('says what it can actually watch for on the oil rigs', async () => {
+    // Rust+ publishes no marker for the crate on a rig -- verified against a
+    // live server whose feed contained zero Crate markers while crates were
+    // visible in game. Only the Heavy Scientist Chinook is observable, so the
+    // reply must not imply the bot is watching for a crate it cannot see.
+    for (const [command, label] of [
+      ['large', 'Large Oil Rig'],
+      ['small', 'Small Oil Rig'],
+    ] as const) {
+      const reply = await resolveInGameCommand(`!${command}`, deps());
+      expect(reply, command).toBe(`${label}: no Heavy Scientists called this session`);
     }
   });
 
@@ -112,7 +124,7 @@ describe('status reflects the state store', () => {
     state.markSpawned(EventSubject.LargeOilRig, new Date(), 'TOP RIGHT');
 
     expect(await resolveInGameCommand('!large', deps(state))).toContain('crate AVAILABLE');
-    expect(await resolveInGameCommand('!small', deps(state))).toBe('Small Oil Rig: not observed this session');
+    expect(await resolveInGameCommand('!small', deps(state))).toBe('Small Oil Rig: no Heavy Scientists called this session');
   });
 
   it('shows the crate countdown after Heavy Scientists are called', async () => {

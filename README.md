@@ -169,6 +169,34 @@ The event logic is deliberately pure and synchronous — `EventDetector.update()
 
 To capture real snapshots for a fixture, log the output of `client.getMapMarkers()` while connected. Note that marker payloads contain player positions and Steam IDs, so `test/fixtures/*.live.json` is gitignored.
 
+## What the Rust+ API can and cannot see
+
+Verified against a live server, not assumed. Two things are simply invisible:
+
+| Thing | Detectable? | Why |
+|---|---|---|
+| Patrol Helicopter | Yes | marker type 8 |
+| Cargo Ship | Yes | marker type 5 |
+| Chinook (CH47) | Yes | marker type 4 |
+| Travelling Vendor | Yes | marker type 9 — undocumented but present |
+| Heavy Scientists called at a rig | Yes | a CH47 within 200u of a rig monument |
+| **Crate on an oil rig** | **No** | no Crate marker is published |
+| **Locked crate dropped at a monument** | **No** | same |
+| **Deep Sea zone** | **No** | it is a zone, not an entity |
+
+Repeated snapshots of a live feed contained **zero Crate markers** while crates
+were plainly visible in game, including right after a Chinook had crossed the
+map and dropped one. So the bot cannot tell you a rig is "available" — the only
+rig event it can observe is a Chinook arriving with Heavy Scientists, which is
+what starts the 15 minute crate countdown.
+
+`scripts/probe-markers.mjs` dumps a live snapshot if you want to re-check this
+after a game update; the crate detection code is still in place and would start
+working immediately if Facepunch begins publishing those markers again.
+
+Deep Sea is predicted from its convar cycle instead, anchored by
+`/deepsea-opened` in Discord.
+
 ## Notes and caveats
 
 - **Rust+ is unofficial.** Facepunch can change or restrict the companion API without notice. There is no stability guarantee.
