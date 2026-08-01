@@ -30,6 +30,16 @@ const MAP_REQUEST_TIMEOUT_MS = 90_000;
 const INITIAL_BACKOFF_MS = 2_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 
+/**
+ * How long to wait for a connection to complete before giving up on it.
+ *
+ * A rejected token produces no error and no close — the socket simply goes
+ * quiet. Without this the client sits on a dead connection forever, never
+ * emitting 'disconnected' and so never scheduling a retry, which is exactly
+ * how it got stuck showing Disconnected while doing nothing about it.
+ */
+const CONNECT_TIMEOUT_MS = 30_000;
+
 function timeoutFor(kind: string): number {
   return kind === 'getMap' ? MAP_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
@@ -108,7 +118,24 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
     return new Promise((resolve, reject) => {
       let settled = false;
 
+      /**
+       * Resolve once the socket is up, but do not leave the caller hanging if
+       * it never is. app.start() awaits this, and a connection that never
+       * settles used to block startup indefinitely — which is how the process
+       * handlers ended up never being installed.
+       */
+      const startupTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        logger.warn(
+          { server: this.label },
+          'first Rust+ connection did not complete; continuing and retrying in the background',
+        );
+        resolve();
+      }, CONNECT_TIMEOUT_MS + 5_000);
+
       const onFirstConnect = () => {
+        clearTimeout(startupTimer);
         settled = true;
         resolve();
       };
@@ -128,7 +155,24 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
     const socket = new RustPlus(serverIp, appPort, playerId, playerToken);
     this.socket = socket;
 
+    // A silently rejected connection never errors or closes, so give up on it
+    // explicitly and let the normal backoff schedule another attempt.
+    const connectTimer = setTimeout(() => {
+      if (this.connected) return;
+      logger.warn(
+        { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS },
+        'Rust+ connection never completed -- token may be stale, or the server is rate limiting',
+      );
+      try {
+        socket.disconnect();
+      } catch {
+        /* already gone */
+      }
+      this.scheduleReconnect();
+    }, CONNECT_TIMEOUT_MS);
+
     socket.on('connected', () => {
+      clearTimeout(connectTimer);
       this.connected = true;
       this.backoffMs = INITIAL_BACKOFF_MS;
       logger.info({ server: this.label }, 'Rust+ connected');
@@ -136,6 +180,7 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
     });
 
     socket.on('disconnected', () => {
+      clearTimeout(connectTimer);
       const wasConnected = this.connected;
       this.connected = false;
       logger.warn({ server: this.label }, 'Rust+ disconnected');
@@ -144,6 +189,7 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
     });
 
     socket.on('error', (error: Error) => {
+      clearTimeout(connectTimer);
       logger.error({ server: this.label, err: error.message }, 'Rust+ socket error');
       this.emit('error', error);
       onFirstFailure?.(error);
