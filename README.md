@@ -107,6 +107,56 @@ The pairing push arrives within seconds and the bot connects itself. In-game com
 
 ⚠️ The Steam token behind step 2 **expires after 14 days**. When it lapses, pairing pushes silently stop arriving — the bot warns you in Discord two days ahead. Re-run steps 2–3 to refresh.
 
+## Deploying to Railway
+
+The repo ships a `Dockerfile` at the root (so Railway needs no Root Directory override) and a `railway.json`.
+
+### Option A — via GitHub (auto-deploys on push)
+
+1. Create a **private** repo on GitHub and push:
+
+   ```bash
+   git remote add origin https://github.com/<you>/rust-event-bot.git
+   git push -u origin main
+   ```
+
+2. Railway → **New Project** → **Deploy from GitHub repo** → pick it.
+3. **Variables** tab → add the eight values from your local `worker/.env`.
+4. Deploy.
+
+### Option B — via CLI (no GitHub)
+
+```bash
+npm i -g @railway/cli
+railway login
+railway init
+railway up
+```
+
+Then set the variables in the dashboard.
+
+### Variables Railway needs
+
+| Variable | Notes |
+|---|---|
+| `DISCORD_TOKEN` | |
+| `DISCORD_CLIENT_ID` | |
+| `DISCORD_GUILD_ID` | |
+| `SUPABASE_URL` | base URL, no `/rest/v1/` |
+| `SUPABASE_SERVICE_ROLE_KEY` | |
+| `CREDENTIALS_ENCRYPTION_KEY` | **must be the same key** — it decrypts credentials already in Supabase |
+| `TIMEZONE` | e.g. `Europe/Tallinn` |
+| `POLL_INTERVAL_MS` | `5000` |
+
+`NODE_ENV=production` is set by the Dockerfile, which also switches logging to plain JSON.
+
+### Things that will bite you
+
+- **Run only one instance.** Two workers sharing a `playerId` compete for the same 25-token Rust+ bucket and post every alert twice. `numReplicas` is pinned to `1` in `railway.json` — leave it there, and **stop the local worker** once Railway is live.
+- **No port, no domain.** This is a background worker, not a web service. It never listens on HTTP. Don't let Railway attach a domain or a healthcheck expecting one.
+- **Pairing still happens locally.** `fcm-register` needs a browser, so run it on your PC and submit via `/connect`. The credentials land in Supabase, and Railway picks them up on its next connect — no redeploy needed.
+- **Re-pairing after the 14-day token expiry** is the same story: local `fcm-register`, then `/connect`.
+
 ## Development
 
 ```bash
