@@ -128,10 +128,11 @@ export class ServerRuntime {
       // still fires, and is not re-armed by the first snapshot.
       await this.timers.rehydrate();
 
-      this.chat = new InGameChatHandler(
-        { serverId: row.id, client: this.client, prefix: this.options.commandPrefix },
-        row.player_id,
-      );
+      this.chat = new InGameChatHandler({
+        serverId: row.id,
+        client: this.client,
+        prefix: this.options.commandPrefix,
+      });
 
       this.poller?.stop();
       this.poller = new MarkerPoller(this.client, detector, this.options.pollIntervalMs);
@@ -230,6 +231,11 @@ export class ServerRuntime {
   }
 
   private async onTeamMessage(steamId: string, name: string, message: string): Promise<void> {
+    // Logged so it is possible to tell "the bot never heard you" (nothing here,
+    // usually because the message went to global chat, or you are not in a
+    // team) apart from "it heard you but did not answer".
+    logger.info({ from: name, message }, 'team chat received');
+
     const mirrorChannel = this.options.getTeamChatChannelId();
     if (mirrorChannel) {
       await this.options.bot.postText(mirrorChannel, `**${name}:** ${message}`);

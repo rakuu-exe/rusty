@@ -135,19 +135,34 @@ export async function resolveInGameCommand(
 /**
  * Handles team chat messages: resolves commands and sends replies.
  *
- * Ignores the bot's own messages by steam id, otherwise a reply that itself
- * starts with the prefix could loop.
+ * Loop prevention is by message content, not by sender.
+ *
+ * sendTeamMessage posts as the *paired player* — there is no separate bot
+ * identity in Rust. So the bot's own replies arrive back carrying the paired
+ * player's Steam ID, which is also the ID of the person most likely to be
+ * typing commands. An earlier version ignored that ID outright, which silently
+ * discarded every command the owner typed: `!large` did nothing at all.
+ *
+ * Instead, replies the bot just sent are remembered briefly and skipped when
+ * they echo back. Commands must start with the prefix and replies never do,
+ * so this is belt-and-braces rather than the only defence.
  */
 export class InGameChatHandler {
   private lastReplyAt = 0;
+  private readonly recentReplies: string[] = [];
 
-  constructor(
-    private readonly deps: InGameCommandDeps,
-    private readonly selfSteamId: string,
-  ) {}
+  constructor(private readonly deps: InGameCommandDeps) {}
+
+  private remember(reply: string): void {
+    this.recentReplies.push(reply);
+    // A handful is plenty; replies are answered one at a time behind a cooldown.
+    if (this.recentReplies.length > 5) this.recentReplies.shift();
+  }
 
   async handle(steamId: string, message: string): Promise<void> {
-    if (steamId === this.selfSteamId) return;
+    void steamId; // sender is deliberately not used -- see class comment
+
+    if (this.recentReplies.includes(message.trim())) return;
 
     let reply: string | null;
     try {
@@ -167,7 +182,9 @@ export class InGameChatHandler {
     this.lastReplyAt = now;
 
     try {
+      this.remember(reply);
       await this.deps.client.sendTeamMessage(reply);
+      logger.info({ command: message.trim() }, 'answered in-game command');
     } catch (error) {
       logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'failed to send team message');
     }
