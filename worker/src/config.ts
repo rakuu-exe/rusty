@@ -48,7 +48,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
-    throw new Error(`Invalid configuration:\n${issues}\n\nCopy .env.example to .env and fill it in.`);
+    // Advice differs by environment: in a container there is no .env to copy,
+    // and pointing at one sends you looking in the wrong place entirely.
+    const hint = env.RAILWAY_ENVIRONMENT || env.KUBERNETES_SERVICE_HOST || env.NODE_ENV === 'production'
+      ? 'Set these as environment variables in your host (Railway: service -> Variables -> Raw Editor, then apply the staged changes).'
+      : 'Copy .env.example to .env and fill it in.';
+    throw new Error(`Invalid configuration:\n${issues}\n\n${hint}`);
   }
 
   // Surface a bad timezone now rather than when formatting the first alert.
