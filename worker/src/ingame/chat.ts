@@ -1,11 +1,15 @@
 /**
  * In-game team chat commands.
  *
- * Commands are strictly read-only. They report the current session state and
- * nothing else: they never arm a timer, never record an event, never start
- * tracking something, and never estimate a spawn simply because somebody
- * asked. If the bot has not observed something, the honest answer is that it
- * has not observed it — an invented countdown is worse than no answer.
+ * Commands are strictly read-only. They report current session state and never
+ * arm a timer, record an event, or start tracking something. If the bot has
+ * not observed something, the honest answer is that it has not — an invented
+ * countdown is worse than no answer.
+ *
+ * Next-spawn estimates are the one thing computed at query time, and only from
+ * spawns the bot actually watched happen. Nothing is fabricated: with too few
+ * observations the estimate is simply omitted. That keeps the spirit of the
+ * rule — do not invent — while still answering "when is the next one".
  *
  * All state comes from EventStateStore, which is written only by the detector
  * in response to real marker transitions. There is deliberately no path from a
@@ -17,7 +21,9 @@
  */
 
 import { formatClock, formatDuration } from '../format/message.js';
-import { EventSubject, describeState, type EventStateStore } from '../events/state.js';
+import { EventSubject, describeState, type EventStateStore, type EventSubjectValue } from '../events/state.js';
+import { describeEstimate, estimateRespawn, type RespawnEstimate } from '../events/respawn.js';
+import { getRecentEvents } from '../db.js';
 import { deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
 import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
@@ -60,10 +66,48 @@ function describeDeepSea(deps: InGameCommandDeps): string {
 }
 
 /**
+ * Which subjects have a spawn cycle worth measuring.
+ *
+ * Oil rigs are deliberately absent: a rig is triggered when a *player* chooses
+ * to swipe a card, so there is no natural interval and an average of past
+ * triggers would describe player habits, not a game timer. Deep Sea is absent
+ * because its cycle is exact once anchored, not estimated.
+ */
+const ESTIMABLE: Partial<Record<EventSubjectValue, { type: string; phase: string }>> = {
+  [EventSubject.PatrolHelicopter]: { type: 'patrol_helicopter', phase: 'entered_map' },
+  [EventSubject.CargoShip]: { type: 'cargo_ship', phase: 'entered_map' },
+  [EventSubject.MonumentChinook]: { type: 'ch47', phase: 'entered_map' },
+  [EventSubject.TravellingVendor]: { type: 'travelling_vendor', phase: 'entered_map' },
+};
+
+/**
+ * Measured next-spawn estimate for a subject, or null if there is not enough
+ * observed history to say anything honest.
+ *
+ * History comes from the event log, which persists across restarts, so the
+ * estimate keeps improving over a wipe even though session state does not.
+ */
+async function estimateFor(
+  deps: InGameCommandDeps,
+  subject: EventSubjectValue,
+): Promise<RespawnEstimate | null> {
+  const spec = ESTIMABLE[subject];
+  if (!spec) return null;
+
+  try {
+    const rows = await getRecentEvents(deps.serverId, spec.type, spec.phase, { limit: 12 });
+    return estimateRespawn(rows.map((row) => new Date(row.created_at)));
+  } catch {
+    // A status reply is more useful without an estimate than not at all.
+    return null;
+  }
+}
+
+/**
  * Resolve a command to a reply, or null when the message is not a command.
  *
- * Pure with respect to bot state: it reads the store and the server, and
- * writes nothing.
+ * Pure with respect to bot state: it reads the store, the event log and the
+ * server, and writes nothing.
  */
 export async function resolveInGameCommand(
   message: string,
@@ -81,8 +125,13 @@ export async function resolveInGameCommand(
     duration: formatDuration,
     clock: (date: Date) => formatClock(date, timezone),
   };
-  const status = (subject: Parameters<EventStateStore['get']>[0]) =>
-    describeState(state.get(subject), formatters);
+
+  /** Status, with a measured next-spawn estimate appended where one exists. */
+  const status = async (subject: EventSubjectValue): Promise<string> => {
+    const base = describeState(state.get(subject), formatters);
+    const estimate = await estimateFor(deps, subject);
+    return estimate ? `${base} — ${describeEstimate(estimate, formatDuration)}` : base;
+  };
 
   switch (rawCommand) {
     // ---- event status, all pure reads -------------------------------------
@@ -111,9 +160,14 @@ export async function resolveInGameCommand(
     case 'deepsea':
       return describeDeepSea(deps);
 
-    case 'oil':
+    case 'oil': {
       // Both rigs, since they are tracked independently.
-      return `${status(EventSubject.LargeOilRig)} | ${status(EventSubject.SmallOilRig)}`;
+      const [large, small] = await Promise.all([
+        status(EventSubject.LargeOilRig),
+        status(EventSubject.SmallOilRig),
+      ]);
+      return `${large} | ${small}`;
+    }
 
     case 'events': {
       // Everything at a glance, for when you have just logged in.
@@ -125,7 +179,7 @@ export async function resolveInGameCommand(
         EventSubject.MonumentChinook,
         EventSubject.TravellingVendor,
       ];
-      return subjects.map((s) => describeState(state.get(s), formatters)).join(' | ');
+      return (await Promise.all(subjects.map((s) => status(s)))).join(' | ');
     }
 
     // ---- live server queries, still read-only ------------------------------
