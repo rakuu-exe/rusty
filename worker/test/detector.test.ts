@@ -201,6 +201,46 @@ describe('crates', () => {
       monument: 'Launch Site',
     });
   });
+
+  it('reports a crate riding the cargo ship as a cargo crate', () => {
+    const d = detector();
+    d.update([marker(40, MarkerType.CargoShip, 1500, 1500)], t0);
+
+    const events = d.update(
+      [marker(40, MarkerType.CargoShip, 1500, 1500), marker(31, MarkerType.Crate, 1540, 1480)],
+      at(5),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'cargo_crate', phase: 'spawned' });
+  });
+
+  it('does not attribute a cargo crate to a monument the ship sails past', () => {
+    // The ship passes coastal monuments; without the cargo check first, its
+    // crates would be reported as "dropped at Launch Site".
+    const d = detector();
+    d.update([marker(40, MarkerType.CargoShip, 2000, 2000)], t0);
+
+    const events = d.update(
+      [marker(40, MarkerType.CargoShip, 2000, 2000), marker(31, MarkerType.Crate, 2020, 2010)],
+      at(5),
+    );
+
+    expect(events[0]).toMatchObject({ type: 'cargo_crate' });
+    expect(events[0]).not.toHaveProperty('monument');
+  });
+
+  it('still reports a land crate as dropped when cargo is far away', () => {
+    const d = detector();
+    d.update([marker(40, MarkerType.CargoShip, 100, 100)], t0);
+
+    const events = d.update(
+      [marker(40, MarkerType.CargoShip, 100, 100), marker(31, MarkerType.Crate, 2010, 1990)],
+      at(5),
+    );
+
+    expect(events[0]).toMatchObject({ type: 'locked_crate', monument: 'Launch Site' });
+  });
 });
 
 describe('cargo ship', () => {
@@ -213,7 +253,7 @@ describe('cargo ship', () => {
     expect(entered[0]).toMatchObject({
       type: 'cargo_ship',
       phase: 'entered_map',
-      grid: 'DEEP SEA, LEFT MIDDLE',
+      grid: 'LEFT MIDDLE',
     });
 
     const left = d.update([], at(10));

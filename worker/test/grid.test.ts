@@ -3,7 +3,7 @@ import {
   GRID_DIAMETER,
   columnToLetters,
   formatGridPosition,
-  formatSeaPosition,
+
   getCorrectedMapSize,
   getGridCell,
   getGridCount,
@@ -146,13 +146,3 @@ describe('formatGridPosition', () => {
   });
 });
 
-describe('formatSeaPosition', () => {
-  it('marks off-map positions as deep sea', () => {
-    expect(formatSeaPosition(4500, -200, MAP_4000)).toBe('DEEP SEA, BOTTOM RIGHT');
-    expect(formatSeaPosition(-500, 2000, MAP_4000)).toBe('DEEP SEA, LEFT MIDDLE');
-  });
-
-  it('uses a plain cell once the ship is on the map', () => {
-    expect(formatSeaPosition(3300, 3300, MAP_4000)).toBe('W4');
-  });
-});

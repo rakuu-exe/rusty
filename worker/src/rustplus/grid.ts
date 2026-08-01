@@ -142,17 +142,6 @@ export function formatGridPosition(x: number, y: number, mapSize: number): strin
   return getGridCell(x, y, mapSize)?.label ?? getMapRegion(x, y, mapSize);
 }
 
-/**
- * Position for something at sea.
- *
- * Cargo Ship spawns and despawns well outside the grid, where "DEEP SEA"
- * carries more meaning than a bare region. Once it sails into the grid it is
- * described by cell like anything else.
- */
-export function formatSeaPosition(x: number, y: number, mapSize: number): string {
-  const cell = getGridCell(x, y, mapSize);
-  return cell ? cell.label : `DEEP SEA, ${getMapRegion(x, y, mapSize)}`;
-}
 
 /** Straight-line distance between two world positions. */
 export function distance(ax: number, ay: number, bx: number, by: number): number {

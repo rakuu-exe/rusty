@@ -65,11 +65,11 @@ describe('formatEventLine', () => {
 
   it('renders cargo ship spawning at sea', () => {
     const line = formatEventLine(
-      event({ type: 'cargo_ship', phase: 'entered_map', grid: 'DEEP SEA, BOTTOM RIGHT' }),
+      event({ type: 'cargo_ship', phase: 'entered_map', grid: 'BOTTOM RIGHT' }),
       options,
     );
 
-    expect(line).toBe('CARGO SHIP ENTERED MAP 14:41 @ DEEP SEA, BOTTOM RIGHT');
+    expect(line).toBe('CARGO SHIP ENTERED MAP 14:41 @ BOTTOM RIGHT');
   });
 
   it('renders an oil rig by region, since rigs sit outside the grid', () => {
@@ -152,11 +152,11 @@ describe('formatEventLineInGame', () => {
   it('is short enough for a Rust chat line', () => {
     // The Discord form shouts in caps with a wall-clock time; in game the
     // message arrives as it happens, so "when" is redundant.
-    expect(inGame({ type: 'cargo_ship', phase: 'left_map', grid: 'DEEP SEA, BOTTOM RIGHT' })).toBe(
-      'Cargo left @ DEEP SEA, BOTTOM RIGHT',
+    expect(inGame({ type: 'cargo_ship', phase: 'left_map', grid: 'BOTTOM RIGHT' })).toBe(
+      'Cargo left @ BOTTOM RIGHT',
     );
-    expect(inGame({ type: 'cargo_ship', phase: 'entered_map', grid: 'DEEP SEA, BOTTOM RIGHT' })).toBe(
-      'Cargo spawned @ DEEP SEA, BOTTOM RIGHT',
+    expect(inGame({ type: 'cargo_ship', phase: 'entered_map', grid: 'BOTTOM RIGHT' })).toBe(
+      'Cargo spawned @ BOTTOM RIGHT',
     );
   });
 
@@ -188,7 +188,7 @@ describe('formatEventLineInGame', () => {
     const cases: Partial<DetectedEvent>[] = [
       { type: 'oil_rig_crate', phase: 'called', monument: 'Large Oil Rig', grid: 'TOP RIGHT', opensAt: new Date() },
       { type: 'locked_crate', phase: 'dropped', monument: 'Water Treatment Plant', grid: 'AA26' },
-      { type: 'cargo_ship', phase: 'entered_map', grid: 'DEEP SEA, BOTTOM RIGHT' },
+      { type: 'cargo_ship', phase: 'entered_map', grid: 'BOTTOM RIGHT' },
     ];
     for (const c of cases) expect(inGame(c).length).toBeLessThan(80);
   });

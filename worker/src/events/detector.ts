@@ -18,7 +18,7 @@
  *    and can be fooled by a rocket landing nearby at the wrong moment.
  */
 
-import { formatGridPosition, formatSeaPosition, distance } from '../rustplus/grid.js';
+import { formatGridPosition, distance } from '../rustplus/grid.js';
 import type { MonumentIndex } from '../rustplus/monuments.js';
 import { MarkerType, type RustMapMarker } from '../rustplus/types.js';
 import type { DetectedEvent } from './types.js';
@@ -36,6 +36,16 @@ export const CARGO_SHIP_EGRESS_MS = 50 * 60 * 1000;
  * it was moving fast.
  */
 export const HELI_DOWNED_RADIUS = 350;
+
+/**
+ * How close a Crate must be to a Cargo Ship marker to count as being aboard.
+ *
+ * The ship is roughly 200 units long and its crates sit along the deck, while
+ * the marker is a single point at the centre. Generous enough to catch crates
+ * at the bow and stern, tight enough that a crate on a nearby shore is not
+ * mistaken for one on the ship.
+ */
+export const CARGO_CRATE_RADIUS = 200;
 
 /**
  * How long an Explosion stays relevant. The crash marker usually appears in
@@ -122,7 +132,7 @@ export class EventDetector {
 
       const tracker: TrackedMarker = { marker, firstSeen: now, lastSeen: now };
       this.tracked.set(marker.id, tracker);
-      events.push(...this.onAppeared(marker, tracker, now));
+      events.push(...this.onAppeared(marker, tracker, now, markers));
     }
 
     for (const [id, tracker] of [...this.tracked]) {
@@ -152,12 +162,27 @@ export class EventDetector {
     return formatGridPosition(x, y, this.mapSize);
   }
 
-  /** As above, but says DEEP SEA for off-map positions. Cargo Ship only. */
-  private seaGrid(x: number, y: number): string {
-    return formatSeaPosition(x, y, this.mapSize);
+  /** Cargo Ship marker nearest this position, if the crate is aboard one. */
+  private cargoShipAt(x: number, y: number, snapshot: RustMapMarker[]): RustMapMarker | null {
+    let best: { marker: RustMapMarker; dist: number } | null = null;
+
+    for (const candidate of snapshot) {
+      if (candidate.type !== MarkerType.CargoShip) continue;
+      const dist = distance(x, y, candidate.x, candidate.y);
+      if (dist <= CARGO_CRATE_RADIUS && (best === null || dist < best.dist)) {
+        best = { marker: candidate, dist };
+      }
+    }
+
+    return best?.marker ?? null;
   }
 
-  private onAppeared(marker: RustMapMarker, tracker: TrackedMarker, now: Date): DetectedEvent[] {
+  private onAppeared(
+    marker: RustMapMarker,
+    tracker: TrackedMarker,
+    now: Date,
+    snapshot: RustMapMarker[],
+  ): DetectedEvent[] {
     const base = {
       markerId: String(marker.id),
       x: marker.x,
@@ -171,9 +196,7 @@ export class EventDetector {
         return [{ ...base, type: 'patrol_helicopter', phase: 'entered_map' }];
 
       case MarkerType.CargoShip:
-        return [
-          { ...base, type: 'cargo_ship', phase: 'entered_map', grid: this.seaGrid(marker.x, marker.y) },
-        ];
+        return [{ ...base, type: 'cargo_ship', phase: 'entered_map' }];
 
       case MarkerType.CH47: {
         // The branch that decides whether this is an oil rig crate call.
@@ -203,6 +226,13 @@ export class EventDetector {
         // Oil rigs always have a crate marker sitting on them; announcing that
         // would fire on every reconnect. Only crates away from a rig are news.
         if (this.monuments.oilRigAt(marker.x, marker.y)) return [];
+
+        // A crate riding the Cargo Ship, rather than one dropped on land.
+        // Checked before the monument lookup because the ship sails past
+        // coastal monuments and would otherwise be attributed to them.
+        if (this.cargoShipAt(marker.x, marker.y, snapshot)) {
+          return [{ ...base, type: 'cargo_crate', phase: 'spawned' }];
+        }
 
         const monument = this.monuments.nearest(marker.x, marker.y);
         return [
@@ -239,7 +269,7 @@ export class EventDetector {
       }
 
       case MarkerType.CargoShip:
-        return [{ ...base, type: 'cargo_ship', phase: 'left_map', grid: this.seaGrid(marker.x, marker.y) }];
+        return [{ ...base, type: 'cargo_ship', phase: 'left_map' }];
 
       case MarkerType.CH47:
         // A Chinook that was announced as an oil rig call has already told the

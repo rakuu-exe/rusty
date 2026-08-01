@@ -3,6 +3,7 @@
 export type RustEventType =
   | 'patrol_helicopter'
   | 'cargo_ship'
+  | 'cargo_crate'
   | 'ch47'
   | 'oil_rig_crate'
   | 'locked_crate';
@@ -14,7 +15,8 @@ export type RustEventPhase =
   | 'called'
   | 'unlocked'
   | 'egress'
-  | 'dropped';
+  | 'dropped'
+  | 'spawned';
 
 export interface DetectedEvent {
   type: RustEventType;

@@ -56,6 +56,9 @@ function subject(event: DetectedEvent): string {
       if (event.phase === 'egress') return 'CARGO SHIP ENTERING EGRESS';
       return 'CARGO SHIP LEFT MAP';
 
+    case 'cargo_crate':
+      return 'CARGO SHIP CRATE SPAWNED';
+
     case 'ch47':
       return event.phase === 'entered_map' ? 'CHINOOK 47 ENTERED MAP' : 'CHINOOK 47 LEFT MAP';
 
@@ -109,6 +112,9 @@ export function formatEventLineInGame(event: DetectedEvent, options: FormatOptio
       if (event.phase === 'egress') return `Cargo leaving ${at}`;
       return `Cargo left ${at}`;
 
+    case 'cargo_crate':
+      return `Cargo crate spawned ${at}`;
+
     case 'ch47':
       return event.phase === 'entered_map' ? `Chinook entered ${at}` : `Chinook left ${at}`;
 
@@ -133,6 +139,8 @@ export function eventColor(event: DetectedEvent): number {
       return event.phase === 'downed' ? 0x2ecc71 : 0xe74c3c;
     case 'cargo_ship':
       return 0x3498db;
+    case 'cargo_crate':
+      return 0x1abc9c;
     case 'ch47':
       return 0x9b59b6;
     case 'oil_rig_crate':
@@ -148,6 +156,8 @@ export function eventEmoji(event: DetectedEvent): string {
       return event.phase === 'downed' ? '💥' : '🚁';
     case 'cargo_ship':
       return '🚢';
+    case 'cargo_crate':
+      return '🧰';
     case 'ch47':
       return '🚁';
     case 'oil_rig_crate':
