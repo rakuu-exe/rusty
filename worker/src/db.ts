@@ -312,8 +312,8 @@ export async function getLastOilRigEvent(
 /**
  * Recent occurrences of one event phase, newest first.
  *
- * Feeds the `!when-*` respawn predictions, which derive each server's actual
- * cadence from observed spawns rather than assuming vanilla timings.
+ * Kept for historical queries and diagnostics. No command depends on it:
+ * commands read live session state, not the event log.
  *
  * `monument` filters the two oil rigs apart, since they share an event type.
  */

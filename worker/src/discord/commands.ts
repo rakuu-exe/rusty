@@ -64,6 +64,12 @@ export const commandDefinitions = [
     .toJSON(),
 
   new SlashCommandBuilder()
+    .setName('deepsea-opened')
+    .setDescription('Record that the Deep Sea zone just opened (it has no map marker to detect)')
+    .setDefaultMemberPermissions(ADMIN_ONLY)
+    .toJSON(),
+
+  new SlashCommandBuilder()
     .setName('setup')
     .setDescription('Choose which channels the bot posts to')
     .setDefaultMemberPermissions(ADMIN_ONLY)
@@ -138,6 +144,8 @@ export async function handleCommand(
       return handleDisconnect(interaction, context);
     case 'setup':
       return handleSetup(interaction, context);
+    case 'deepsea-opened':
+      return handleDeepSeaOpened(interaction, context);
     default:
       await interaction.reply({ content: `Unknown command: ${interaction.commandName}`, ephemeral: true });
   }
@@ -239,6 +247,29 @@ async function handleDisconnect(interaction: ChatInputCommandInteraction, contex
   try {
     await context.disconnectServer(serverId);
     await interaction.editReply(`✅ Stopped tracking \`${serverId}\`.`);
+  } catch (error) {
+    await interaction.editReply(`❌ ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function handleDeepSeaOpened(
+  interaction: ChatInputCommandInteraction,
+  context: BotContext,
+): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const results = await context.recordDeepSeaOpened();
+    if (results.length === 0) {
+      await interaction.editReply('❌ No connected server to anchor.');
+      return;
+    }
+
+    const lines = results.map(
+      (r) => `✅ **${r.server}** — Deep Sea anchored as open now, closes in ~${formatDuration(r.closesInMs)}`,
+    );
+    lines.push('', 'Use `!deepsea` in team chat to check it from now on.');
+    await interaction.editReply(lines.join('\n'));
   } catch (error) {
     await interaction.editReply(`❌ ${error instanceof Error ? error.message : String(error)}`);
   }

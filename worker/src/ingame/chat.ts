@@ -1,22 +1,26 @@
 /**
  * In-game team chat commands.
  *
+ * Commands are strictly read-only. They report the current session state and
+ * nothing else: they never arm a timer, never record an event, never start
+ * tracking something, and never estimate a spawn simply because somebody
+ * asked. If the bot has not observed something, the honest answer is that it
+ * has not observed it — an invented countdown is worse than no answer.
+ *
+ * All state comes from EventStateStore, which is written only by the detector
+ * in response to real marker transitions. There is deliberately no path from a
+ * command back into that store.
+ *
  * Hard constraint worth stating once: the Rust+ API only exposes the *team*
  * chat of the paired player. Global chat is invisible to the bot, and always
  * will be — this is a Facepunch limitation, not something to engineer around.
- * So these commands only work for people in the paired player's team.
- *
- * Replies cost 2 rate-limit tokens each and share the bucket with the marker
- * poller, so answers are terse and a cooldown keeps a bored teammate spamming
- * `!heli` from starving the polling loop.
  */
 
-import { getLastEvent, getLastOilRigEvent, getRecentEvents, recordEvent } from '../db.js';
-import type { EventLogRow } from '../db.js';
 import { formatDuration } from '../format/message.js';
+import { EventSubject, describeState, type EventStateStore } from '../events/state.js';
+import { deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
 import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
-import { deepSeaState, estimateRespawn, type RespawnEstimate } from '../events/respawn.js';
 
 /** Minimum gap between replies to one team, in ms. */
 export const REPLY_COOLDOWN_MS = 3_000;
@@ -25,145 +29,39 @@ export interface InGameCommandDeps {
   serverId: string;
   client: RustPlusClient;
   prefix: string;
+  /** Read-only from here. Commands must not mutate session state. */
+  state: EventStateStore;
+  /** Supplies the Deep Sea anchor, if one has been recorded. */
+  getDeepSeaAnchor?: () => DeepSeaAnchor | null;
 }
 
 /**
- * Describes when something last happened, or says it hasn't.
+ * Deep Sea status.
  *
- * "yet" rather than "this wipe": the bot only knows what it observed while
- * connected. It cannot see events from before it started, so claiming nothing
- * happened all wipe would be an overstatement — it may simply not have been
- * watching.
+ * Deep Sea is a zone rather than an entity, so it never appears in the Rust+
+ * marker feed and genuinely cannot be observed. Its cycle is fixed by server
+ * convars, so it can be projected from a recorded open — but only if one has
+ * been recorded. Without an anchor the answer is "not observed", never a
+ * guess.
  */
-function since(row: EventLogRow | null, label: string, now = Date.now()): string {
-  if (!row) return `${label}: nothing seen yet`;
+function describeDeepSea(deps: InGameCommandDeps): string {
+  const anchor = deps.getDeepSeaAnchor?.() ?? null;
+  if (!anchor) return 'Deep Sea: not observed this session';
 
-  const ago = formatDuration(now - new Date(row.created_at).getTime());
-  const where = row.grid ? ` @ ${row.grid}` : '';
-  return `${label}: ${row.phase.replace(/_/g, ' ')} ${ago} ago${where}`;
-}
-
-async function describeEvent(serverId: string, eventType: string, label: string): Promise<string> {
-  return since(await getLastEvent(serverId, eventType), label);
-}
-
-/** Oil rig answers include the unlock time, which is the point of asking. */
-async function describeOilRig(serverId: string, label: string): Promise<string> {
-  const called = await getLastOilRigEvent(serverId, label, 'called');
-  if (!called) return `${label}: no crate called yet`;
-
-  const ago = formatDuration(Date.now() - new Date(called.created_at).getTime());
-  const where = called.grid ? ` @ ${called.grid}` : '';
-
-  if (called.opens_at) {
-    const opensIn = new Date(called.opens_at).getTime() - Date.now();
-    if (opensIn > 0) return `${label}: crate called ${ago} ago${where}, opens in ${formatDuration(opensIn)}`;
-    return `${label}: crate called ${ago} ago${where}, already open`;
-  }
-
-  return `${label}: crate called ${ago} ago${where}`;
-}
-
-/**
- * Which event marks a "spawn" for each `!when-*` subject.
- *
- * The oil rigs key off `spawned` (the crate respawning on its own) rather than
- * `called` (a player bringing heavy scientists in). "!when-loil" asks when the
- * crate is next available, which is the respawn — a called crate depends on
- * someone choosing to call it and has no cycle to predict.
- */
-const RESPAWN_SUBJECTS = {
-  cargo: { label: 'Cargo', type: 'cargo_ship', phase: 'entered_map' },
-  crate: { label: 'Chinook crate', type: 'ch47', phase: 'entered_map' },
-  heli: { label: 'Heli', type: 'patrol_helicopter', phase: 'entered_map' },
-  loil: { label: 'Large Oil Rig', type: 'oil_rig_crate', phase: 'spawned', monument: 'Large Oil Rig' },
-  smoil: { label: 'Small Oil Rig', type: 'oil_rig_crate', phase: 'spawned', monument: 'Small Oil Rig' },
-  oil: { label: 'Oil Rig', type: 'oil_rig_crate', phase: 'spawned' },
-  vendor: { label: 'Vendor', type: 'travelling_vendor', phase: 'entered_map' },
-} as const satisfies Record<string, { label: string; type: string; phase: string; monument?: string }>;
-
-export type RespawnSubject = keyof typeof RESPAWN_SUBJECTS;
-
-/**
- * Is the thing currently on the map?
- *
- * Derived from whether the most recent event for it was an arrival rather than
- * a departure, which avoids keeping separate live state that a restart loses.
- */
-function isActive(latest: EventLogRow | null): boolean {
-  if (!latest) return false;
-  return latest.phase === 'entered_map' || latest.phase === 'called' || latest.phase === 'spawned';
-}
-
-/** Renders a respawn estimate as a short chat line. */
-function describeRespawn(label: string, estimate: RespawnEstimate): string {
-  const active = estimate.active ? `${label}: on the map now` : null;
-
-  if (estimate.intervalMs === null) {
-    // No usable history, so any number quoted would be invented.
-    const seen =
-      estimate.sinceLastMs === null
-        ? 'never seen yet'
-        : `last seen ${formatDuration(estimate.sinceLastMs)} ago`;
-    return active
-      ? `${active} (${seen}, still learning the cycle)`
-      : `${label}: ${seen} — not enough history to estimate yet`;
-  }
-
-  const every = `~every ${formatDuration(estimate.intervalMs)}`;
-  const basis = `from ${estimate.observations} spawns`;
-
-  if (estimate.active) return `${active}, ${every} ${basis}`;
-
-  const next = estimate.nextInMs!;
-  if (next <= 0) return `${label}: due now (overdue ${formatDuration(-next)}, ${every})`;
-  return `${label}: ~${formatDuration(next)} (${every}, ${basis})`;
-}
-
-async function describeSubjectRespawn(serverId: string, subject: RespawnSubject): Promise<string> {
-  const spec = RESPAWN_SUBJECTS[subject];
-  const monument = 'monument' in spec ? spec.monument : undefined;
-
-  const [spawns, latest] = await Promise.all([
-    getRecentEvents(serverId, spec.type, spec.phase, { limit: 10, ...(monument ? { monument } : {}) }),
-    monument ? getLastOilRigEvent(serverId, monument) : getLastEvent(serverId, spec.type),
-  ]);
-
-  const estimate = estimateRespawn(
-    spawns.map((row) => new Date(row.created_at)),
-    { active: isActive(latest) },
-  );
-
-  return describeRespawn(spec.label, estimate);
-}
-
-/**
- * Deep Sea, which cannot be observed at all.
- *
- * It has no Rust+ map marker — it is a zone, not an entity — so nothing in the
- * marker feed reveals it. Its cycle is fixed by convars though, so one
- * confirmed open time is enough to project every open and close from then on.
- */
-async function describeDeepSea(serverId: string): Promise<string> {
-  const anchor = await getLastEvent(serverId, 'deep_sea', 'opened');
-  if (!anchor) {
-    return 'Deep Sea: no anchor set — type !deepsea-open the moment it opens and I can predict it from then on';
-  }
-
-  const state = deepSeaState(new Date(anchor.created_at));
+  const state = deepSeaState(anchor.openedAt);
 
   if (state.open) {
     const warning = state.radiationPhase ? ' (RADIATION - closing)' : '';
     return `Deep Sea: OPEN, closes in ~${formatDuration(state.closesInMs!)}${warning}`;
   }
-
   return `Deep Sea: closed, opens in ~${formatDuration(state.opensInMs!)}`;
 }
 
 /**
  * Resolve a command to a reply, or null when the message is not a command.
  *
- * Kept free of side effects other than reads so it can be tested directly.
+ * Pure with respect to bot state: it reads the store and the server, and
+ * writes nothing.
  */
 export async function resolveInGameCommand(
   message: string,
@@ -175,36 +73,61 @@ export async function resolveInGameCommand(
   const [rawCommand] = trimmed.slice(deps.prefix.length).trim().toLowerCase().split(/\s+/);
   if (!rawCommand) return null;
 
-  const { serverId, client } = deps;
+  const { client, state } = deps;
+  const status = (subject: Parameters<EventStateStore['get']>[0]) =>
+    describeState(state.get(subject), formatDuration);
 
   switch (rawCommand) {
+    // ---- event status, all pure reads -------------------------------------
     case 'heli':
-      return describeEvent(serverId, 'patrol_helicopter', 'Heli');
+      return status(EventSubject.PatrolHelicopter);
 
     case 'cargo':
-      return describeEvent(serverId, 'cargo_ship', 'Cargo');
+      return status(EventSubject.CargoShip);
+
+    case 'large':
+      return status(EventSubject.LargeOilRig);
+
+    case 'small':
+      return status(EventSubject.SmallOilRig);
 
     case 'chinook':
     case 'ch47':
-      return describeEvent(serverId, 'ch47', 'Chinook');
+      return status(EventSubject.MonumentChinook);
+
+    case 'vendor':
+      return status(EventSubject.TravellingVendor);
 
     case 'crate':
-      return describeEvent(serverId, 'locked_crate', 'Crate');
+      return status(EventSubject.LockedCrate);
 
-    case 'large':
-    case 'small': {
-      // Both rigs share an event type, so filter on the monument name.
-      const label = rawCommand === 'large' ? 'Large Oil Rig' : 'Small Oil Rig';
-      return describeOilRig(serverId, label);
+    case 'deepsea':
+      return describeDeepSea(deps);
+
+    case 'oil':
+      // Both rigs, since they are tracked independently.
+      return `${status(EventSubject.LargeOilRig)} | ${status(EventSubject.SmallOilRig)}`;
+
+    case 'events': {
+      // Everything at a glance, for when you have just logged in.
+      const subjects = [
+        EventSubject.PatrolHelicopter,
+        EventSubject.CargoShip,
+        EventSubject.LargeOilRig,
+        EventSubject.SmallOilRig,
+        EventSubject.MonumentChinook,
+        EventSubject.TravellingVendor,
+      ];
+      return subjects.map((s) => describeState(state.get(s), formatDuration)).join(' | ');
     }
 
+    // ---- live server queries, still read-only ------------------------------
     case 'time': {
       const time = await client.getTime();
       // Rust reports time as a float where the integer part is the hour.
       const hours = Math.floor(time.time);
       const minutes = Math.floor((time.time - hours) * 60);
-      const clock = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-      return `In-game time: ${clock}`;
+      return `In-game time: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
     }
 
     case 'pop': {
@@ -224,40 +147,12 @@ export async function resolveInGameCommand(
       return `${info.name} — ${info.players}/${info.maxPlayers} online`;
     }
 
-    case 'vendor':
-      return describeEvent(serverId, 'travelling_vendor', 'Vendor');
-
-    case 'deepsea':
-      return describeDeepSea(serverId);
-
-    /**
-     * Anchors the Deep Sea cycle. Someone must say this the moment it opens,
-     * because there is no marker for the bot to see it happen.
-     */
-    case 'deepsea-open':
-    case 'deepsea-opened': {
-      await recordEvent({ serverId, eventType: 'deep_sea', phase: 'opened' });
-      const state = deepSeaState(new Date());
-      return `Deep Sea anchored as open now — closes in ~${formatDuration(state.closesInMs!)}`;
-    }
-
     case 'help':
-      return `Commands: ${['heli', 'cargo', 'chinook', 'large', 'small', 'crate', 'vendor', 'deepsea', 'time', 'pop', 'wipe', 'status']
+      return `Commands: ${['heli', 'cargo', 'large', 'small', 'oil', 'chinook', 'vendor', 'crate', 'deepsea', 'events', 'time', 'pop', 'wipe', 'status']
         .map((c) => deps.prefix + c)
-        .join(' ')} | ${deps.prefix}when-<cargo|crate|heli|loil|smoil|oil|vendor|deepsea>`;
+        .join(' ')}`;
 
-    default: {
-      // !when-<subject> respawn estimates.
-      const when = rawCommand.match(/^when-(.+)$/);
-      if (when) {
-        const subject = when[1]!;
-        if (subject === 'deepsea') return describeDeepSea(serverId);
-        if (subject in RESPAWN_SUBJECTS) {
-          return describeSubjectRespawn(serverId, subject as RespawnSubject);
-        }
-        return null;
-      }
-    }
+    default:
       // Unknown text starting with the prefix is ignored rather than answered,
       // so ordinary team chat using "!" does not draw a reply every time.
       return null;

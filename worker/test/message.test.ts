@@ -30,7 +30,7 @@ describe('formatEventLine', () => {
       options,
     );
 
-    expect(line).toBe('LARGE OIL RIG CRATE CALLED 14:41 OPENS 14:56 @ W4');
+    expect(line).toBe('LARGE OIL RIG HEAVY SCIENTISTS CALLED 14:41 OPENS 14:56 @ W4');
   });
 
   it('renders the small rig variant', () => {
@@ -45,7 +45,7 @@ describe('formatEventLine', () => {
       options,
     );
 
-    expect(line).toBe('SMALL OIL RIG CRATE CALLED 14:41 OPENS 14:56 @ D18');
+    expect(line).toBe('SMALL OIL RIG HEAVY SCIENTISTS CALLED 14:41 OPENS 14:56 @ D18');
   });
 
   it('renders the unlock without an OPENS clause', () => {
@@ -54,7 +54,7 @@ describe('formatEventLine', () => {
       options,
     );
 
-    expect(line).toBe('LARGE OIL RIG CRATE UNLOCKED 14:41 @ W4');
+    expect(line).toBe('LARGE OIL RIG LOCKED CRATE UNLOCKED 14:41 @ W4');
   });
 
   it('renders helicopter phases', () => {
@@ -84,7 +84,7 @@ describe('formatEventLine', () => {
       options,
     );
 
-    expect(line).toBe('LARGE OIL RIG CRATE CALLED 14:41 OPENS 14:56 @ TOP RIGHT');
+    expect(line).toBe('LARGE OIL RIG HEAVY SCIENTISTS CALLED 14:41 OPENS 14:56 @ TOP RIGHT');
   });
 
   it('renders a locked crate with and without a monument', () => {
@@ -103,7 +103,7 @@ describe('formatEventLine', () => {
     );
 
     // UTC+3 in August.
-    expect(line).toBe('LARGE OIL RIG CRATE CALLED 17:41 OPENS 17:56 @ W4');
+    expect(line).toBe('LARGE OIL RIG HEAVY SCIENTISTS CALLED 17:41 OPENS 17:56 @ W4');
   });
 });
 
@@ -169,15 +169,15 @@ describe('formatEventLineInGame', () => {
         grid: 'TOP RIGHT',
         opensAt: new Date('2026-08-01T14:56:00Z'),
       }),
-    ).toBe('Large Oil Rig crate called @ TOP RIGHT, opens 14:56');
+    ).toBe('Large Oil Rig Heavy Scientists called @ TOP RIGHT, unlocks 14:56');
   });
 
   it('covers the remaining events', () => {
     expect(inGame({})).toBe('Heli entered @ W4');
     expect(inGame({ phase: 'downed' })).toBe('Heli DOWNED @ W4');
-    expect(inGame({ type: 'ch47', phase: 'entered_map', grid: 'P7' })).toBe('Chinook entered @ P7');
+    expect(inGame({ type: 'ch47', phase: 'entered_map', grid: 'P7' })).toBe('Crate Chinook entered @ P7');
     expect(inGame({ type: 'oil_rig_crate', phase: 'unlocked', monument: 'Small Oil Rig', grid: 'A0' })).toBe(
-      'Small Oil Rig crate OPEN @ A0',
+      'Small Oil Rig locked crate UNLOCKED @ A0',
     );
     expect(inGame({ type: 'locked_crate', phase: 'dropped', monument: 'Launch Site', grid: 'D12' })).toBe(
       'Locked crate dropped at Launch Site @ D12',

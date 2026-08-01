@@ -21,6 +21,7 @@ import {
   type DiscordConfigRow,
 } from './db.js';
 import { DiscordBot } from './discord/bot.js';
+import { deepSeaState } from './events/deepSea.js';
 import type { BotContext, PairingStatus, ServerStatus } from './discord/context.js';
 import { logger } from './logger.js';
 import {
@@ -292,5 +293,20 @@ export class App implements BotContext {
 
   async setTeamChatChannel(channelId: string | null): Promise<void> {
     this.guildConfig = await upsertGuildConfig(this.guildId, { team_chat_channel_id: channelId });
+  }
+
+  async recordDeepSeaOpened(): Promise<{ server: string; closesInMs: number }[]> {
+    const now = new Date();
+    const results: { server: string; closesInMs: number }[] = [];
+
+    for (const runtime of this.runtimes.values()) {
+      await runtime.recordDeepSeaOpened(now);
+      results.push({
+        server: (await runtime.status()).name,
+        closesInMs: deepSeaState(now, now).closesInMs ?? 0,
+      });
+    }
+
+    return results;
   }
 }

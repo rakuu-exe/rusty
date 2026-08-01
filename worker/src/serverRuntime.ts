@@ -8,6 +8,7 @@
 
 import {
   decryptedPlayerToken,
+  getLastEvent,
   getMonuments,
   getPendingTimers,
   recordEvent,
@@ -16,6 +17,7 @@ import {
   type RustServerRow,
 } from './db.js';
 import { CARGO_SHIP_EGRESS_MS, EventDetector } from './events/detector.js';
+import { EventSubject, type EventStateStore } from './events/state.js';
 import { MarkerPoller } from './events/poller.js';
 import { TimerScheduler } from './events/timers.js';
 import type { DetectedEvent } from './events/types.js';
@@ -46,6 +48,13 @@ export class ServerRuntime {
   private poller: MarkerPoller | null = null;
   private chat: InGameChatHandler | null = null;
   private readonly selfMessages = new SelfMessageTracker();
+  /** Rebuilt on every connection, since a wipe invalidates world state. */
+  private detector: EventDetector | null = null;
+  /**
+   * Last confirmed Deep Sea open, supplied by an admin rather than observed.
+   * Persisted, because the convar cycle keeps running across bot restarts.
+   */
+  private deepSeaAnchor: Date | null = null;
   private mapSize: number | null = null;
   private lastInfo: { players: number; maxPlayers: number } | null = null;
 
@@ -113,6 +122,7 @@ export class ServerRuntime {
       const monuments = await this.loadMonuments(info.wipeTime);
       const index = new MonumentIndex(monuments);
       const detector = new EventDetector({ mapSize: info.mapSize, monuments: index });
+      this.detector = detector;
 
       // Positive confirmation that the pieces event detection depends on are
       // actually in place. Without this the worker looks identical whether it
@@ -131,8 +141,20 @@ export class ServerRuntime {
       // still fires, and is not re-armed by the first snapshot.
       await this.timers.rehydrate();
 
+      // Deep Sea's cycle keeps running while the bot is down, so a previously
+      // recorded anchor stays valid and is restored rather than re-asked for.
+      const anchor = await getLastEvent(row.id, 'deep_sea', 'opened');
+      this.deepSeaAnchor = anchor ? new Date(anchor.created_at) : null;
+
       this.chat = new InGameChatHandler(
-        { serverId: row.id, client: this.client, prefix: this.options.commandPrefix },
+        {
+          serverId: row.id,
+          client: this.client,
+          prefix: this.options.commandPrefix,
+          // Commands read these and never write to them.
+          state: detector.state,
+          getDeepSeaAnchor: () => (this.deepSeaAnchor ? { openedAt: this.deepSeaAnchor } : null),
+        },
         this.selfMessages,
       );
 
@@ -217,6 +239,14 @@ export class ServerRuntime {
     if (event.type === 'oil_rig_crate' && event.phase === 'called') {
       await this.timers.armCrateUnlock(event);
     }
+
+    // Advance the rig lifecycle when its countdown resolves. Driven by the
+    // timer that the observed Chinook arrival armed -- never by a command.
+    if (event.type === 'oil_rig_crate' && event.phase === 'unlocked' && event.monument) {
+      const subject =
+        event.monument === 'Large Oil Rig' ? EventSubject.LargeOilRig : EventSubject.SmallOilRig;
+      this.detector?.state.markOilRigUnlocked(subject, event.at);
+    }
     if (event.type === 'cargo_ship' && event.phase === 'entered_map') {
       await this.timers.armCargoEgress(event, new Date(event.at.getTime() + CARGO_SHIP_EGRESS_MS));
     }
@@ -275,6 +305,32 @@ export class ServerRuntime {
     }
 
     await this.chat?.handle(steamId, message);
+  }
+
+  /**
+   * Record a confirmed Deep Sea open.
+   *
+   * Called from the admin Discord command, never from a status command: Deep
+   * Sea has no marker, so this is a human observation being entered, not the
+   * bot inferring anything.
+   */
+  async recordDeepSeaOpened(at: Date): Promise<void> {
+    await recordEvent({
+      serverId: this.serverId,
+      eventType: 'deep_sea',
+      phase: 'opened',
+      // No position: Deep Sea covers a whole hemisphere.
+    });
+    this.deepSeaAnchor = at;
+  }
+
+  /** Current session state, for read-only reporting. */
+  get eventState(): EventStateStore | null {
+    return this.detector?.state ?? null;
+  }
+
+  get deepSeaOpenedAt(): Date | null {
+    return this.deepSeaAnchor;
   }
 
   async status(): Promise<ServerStatus> {

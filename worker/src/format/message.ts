@@ -66,15 +66,18 @@ function subject(event: DetectedEvent): string {
       return event.phase === 'opened' ? 'DEEP SEA OPENED' : 'DEEP SEA CLOSED';
 
     case 'ch47':
-      return event.phase === 'entered_map' ? 'CHINOOK 47 ENTERED MAP' : 'CHINOOK 47 LEFT MAP';
+      // Named for what it is doing. A Chinook heading to an oil rig is a
+      // different event entirely and never reaches this branch.
+      return event.phase === 'entered_map' ? 'CRATE CHINOOK ENTERED MAP' : 'CRATE CHINOOK LEFT MAP';
 
     case 'oil_rig_crate': {
       const rig = monument ?? 'OIL RIG';
-      if (event.phase === 'called') return `${rig} CRATE CALLED`;
-      // A respawn is the crate becoming available again on its own, distinct
-      // from a player calling heavy scientists in to unlock it.
-      if (event.phase === 'spawned') return `${rig} CRATE RESPAWNED`;
-      return `${rig} CRATE UNLOCKED`;
+      // "Heavy Scientists called" names what actually happened; the crate was
+      // already there, and a Chinook has just delivered its guards.
+      if (event.phase === 'called') return `${rig} HEAVY SCIENTISTS CALLED`;
+      // A spawn is the rig's crate becoming available again on its own.
+      if (event.phase === 'spawned') return `${rig} AVAILABLE`;
+      return `${rig} LOCKED CRATE UNLOCKED`;
     }
 
     case 'locked_crate':
@@ -133,16 +136,16 @@ export function formatEventLineInGame(event: DetectedEvent, options: FormatOptio
       return event.phase === 'opened' ? 'Deep Sea OPEN' : 'Deep Sea closed';
 
     case 'ch47':
-      return event.phase === 'entered_map' ? `Chinook entered ${at}` : `Chinook left ${at}`;
+      return event.phase === 'entered_map' ? `Crate Chinook entered ${at}` : `Crate Chinook left ${at}`;
 
     case 'oil_rig_crate': {
       const rig = event.monument ?? 'Oil Rig';
       if (event.phase === 'called') {
-        const opens = event.opensAt ? `, opens ${formatClock(event.opensAt, options.timezone)}` : '';
-        return `${rig} crate called ${at}${opens}`;
+        const opens = event.opensAt ? `, unlocks ${formatClock(event.opensAt, options.timezone)}` : '';
+        return `${rig} Heavy Scientists called ${at}${opens}`;
       }
-      if (event.phase === 'spawned') return `${rig} crate respawned ${at}`;
-      return `${rig} crate OPEN ${at}`;
+      if (event.phase === 'spawned') return `${rig} available ${at}`;
+      return `${rig} locked crate UNLOCKED ${at}`;
     }
 
     case 'locked_crate':

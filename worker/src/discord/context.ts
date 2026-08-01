@@ -44,4 +44,14 @@ export interface BotContext {
 
   setEventChannel(channelId: string): Promise<void>;
   setTeamChatChannel(channelId: string | null): Promise<void>;
+
+  /**
+   * Record that the Deep Sea zone just opened.
+   *
+   * Deep Sea has no Rust+ map marker — it is a zone, not an entity — so this
+   * is the one piece of event state a human has to supply. It lives on an
+   * admin Discord command rather than an in-game one so that status commands
+   * stay strictly read-only.
+   */
+  recordDeepSeaOpened(): Promise<{ server: string; closesInMs: number }[]>;
 }

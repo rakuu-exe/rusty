@@ -21,6 +21,7 @@
 import { formatGridPosition, distance } from '../rustplus/grid.js';
 import type { MonumentIndex } from '../rustplus/monuments.js';
 import { MarkerType, type RustMapMarker } from '../rustplus/types.js';
+import { EventStateStore, EventSubject, type EventSubjectValue } from './state.js';
 import type { DetectedEvent } from './types.js';
 
 /** Locked crate at an oil rig unlocks 15 minutes after heavy scientists land. */
@@ -80,6 +81,15 @@ export class EventDetector {
   private readonly explosions: RememberedExplosion[] = [];
   private primed = false;
 
+  /**
+   * Session state, updated only from real marker transitions.
+   *
+   * Exposed for commands to read. Nothing outside this class writes to it
+   * except the timer that resolves an oil rig unlock, which is itself driven
+   * by an observed Chinook arrival rather than by anyone asking a question.
+   */
+  readonly state = new EventStateStore();
+
   private readonly mapSize: number;
   private readonly monuments: MonumentIndex;
   private readonly heliDownedRadius: number;
@@ -111,8 +121,18 @@ export class EventDetector {
     this.rememberExplosions(markers, now);
 
     if (!this.primed) {
+      /**
+       * Synchronise the world without announcing or inventing anything.
+       *
+       * Whatever is on the map now is recorded as active with **no start
+       * time** — the bot did not see it spawn and must not imply otherwise.
+       * No events are emitted and no timers are armed.
+       */
       for (const marker of markers) {
         this.tracked.set(marker.id, { marker, firstSeen: now, lastSeen: now });
+
+        const subject = this.subjectFor(marker, markers);
+        if (subject) this.state.markPresentAtStartup(subject, now, this.grid(marker.x, marker.y));
       }
       this.primed = true;
       return [];
@@ -127,6 +147,9 @@ export class EventDetector {
         // marker actually was, not where it first appeared.
         existing.marker = marker;
         existing.lastSeen = now;
+
+        const subject = this.subjectFor(marker, markers);
+        if (subject) this.state.markSeen(subject, now, this.grid(marker.x, marker.y));
         continue;
       }
 
@@ -162,6 +185,41 @@ export class EventDetector {
     return formatGridPosition(x, y, this.mapSize);
   }
 
+  /**
+   * Which tracked subject a marker belongs to, if any.
+   *
+   * Crates are context-dependent: one at an oil rig belongs to that rig, one
+   * on the Cargo Ship belongs to the ship, and one anywhere else is a monument
+   * drop. That distinction is what keeps Large and Small Oil Rig independent.
+   */
+  private subjectFor(marker: RustMapMarker, snapshot: RustMapMarker[]): EventSubjectValue | null {
+    switch (marker.type) {
+      case MarkerType.PatrolHelicopter:
+        return EventSubject.PatrolHelicopter;
+
+      case MarkerType.CargoShip:
+        return EventSubject.CargoShip;
+
+      case MarkerType.TravellingVendor:
+        return EventSubject.TravellingVendor;
+
+      case MarkerType.CH47:
+        // A Chinook at a rig is that rig's Heavy Scientist delivery and is
+        // handled through the rig's lifecycle, not as a Chinook of its own.
+        return this.monuments.oilRigAt(marker.x, marker.y) ? null : EventSubject.MonumentChinook;
+
+      case MarkerType.Crate: {
+        const rig = this.monuments.oilRigAt(marker.x, marker.y);
+        if (rig) return rig.kind === 'large' ? EventSubject.LargeOilRig : EventSubject.SmallOilRig;
+        if (this.cargoShipAt(marker.x, marker.y, snapshot)) return null;
+        return EventSubject.LockedCrate;
+      }
+
+      default:
+        return null;
+    }
+  }
+
   /** Cargo Ship marker nearest this position, if the crate is aboard one. */
   private cargoShipAt(x: number, y: number, snapshot: RustMapMarker[]): RustMapMarker | null {
     let best: { marker: RustMapMarker; dist: number } | null = null;
@@ -191,6 +249,14 @@ export class EventDetector {
       at: now,
     };
 
+    // Anything with a plain lifecycle records its spawn here. Crates and rig
+    // Chinooks are handled in their own branches below, where the context
+    // needed to identify the subject is available.
+    const simple = this.subjectFor(marker, snapshot);
+    if (simple && marker.type !== MarkerType.Crate) {
+      this.state.markSpawned(simple, now, base.grid);
+    }
+
     switch (marker.type) {
       case MarkerType.PatrolHelicopter:
         return [{ ...base, type: 'patrol_helicopter', phase: 'entered_map' }];
@@ -202,11 +268,25 @@ export class EventDetector {
         return [{ ...base, type: 'travelling_vendor', phase: 'entered_map' }];
 
       case MarkerType.CH47: {
-        // The branch that decides whether this is an oil rig crate call.
+        /**
+         * Three distinct events share this marker type and must never be
+         * merged: a Chinook delivering Heavy Scientists to Large Oil Rig, the
+         * same to Small Oil Rig, and a Chinook crossing the map to drop a
+         * locked crate at a monument. Proximity to a rig is the only signal
+         * that separates them.
+         */
         const rig = this.monuments.oilRigAt(marker.x, marker.y);
         if (!rig) {
           return [{ ...base, type: 'ch47', phase: 'entered_map' }];
         }
+
+        const subject = rig.kind === 'large' ? EventSubject.LargeOilRig : EventSubject.SmallOilRig;
+        const rigGrid = this.grid(rig.monument.x, rig.monument.y);
+
+        // The countdown is anchored to the Chinook's arrival, the only moment
+        // the game actually reveals.
+        const unlocksAt = new Date(now.getTime() + OIL_RIG_CRATE_UNLOCK_MS);
+        this.state.markOilRigTriggered(subject, now, unlocksAt, rigGrid);
 
         tracker.oilRig = rig.monument.displayName;
         return [
@@ -219,8 +299,8 @@ export class EventDetector {
             // may still be a hundred units out on approach.
             x: rig.monument.x,
             y: rig.monument.y,
-            grid: this.grid(rig.monument.x, rig.monument.y),
-            opensAt: new Date(now.getTime() + OIL_RIG_CRATE_UNLOCK_MS),
+            grid: rigGrid,
+            opensAt: unlocksAt,
           },
         ];
       }
@@ -228,17 +308,20 @@ export class EventDetector {
       case MarkerType.Crate: {
         /**
          * A crate appearing at an oil rig is that rig's locked crate
-         * respawning, and is exactly what `!when-loil` / `!when-smoil` are
-         * about.
+         * respawning, which makes the rig available again.
          *
          * An earlier version discarded these outright, worried that the crate
          * permanently sitting on a rig would be announced on every reconnect.
-         * That guard was unnecessary — priming already absorbs whatever is on
-         * the map when the bot connects — so all it achieved was throwing away
-         * every genuine respawn.
+         * That guard was unnecessary — startup synchronisation already absorbs
+         * whatever is on the map when the bot connects — so all it achieved was
+         * throwing away every genuine respawn.
          */
         const rig = this.monuments.oilRigAt(marker.x, marker.y);
         if (rig) {
+          const subject = rig.kind === 'large' ? EventSubject.LargeOilRig : EventSubject.SmallOilRig;
+          const rigGrid = this.grid(rig.monument.x, rig.monument.y);
+          this.state.markSpawned(subject, now, rigGrid);
+
           return [
             {
               ...base,
@@ -247,9 +330,13 @@ export class EventDetector {
               monument: rig.monument.displayName,
               x: rig.monument.x,
               y: rig.monument.y,
-              grid: this.grid(rig.monument.x, rig.monument.y),
+              grid: rigGrid,
             },
           ];
+        }
+
+        if (!this.cargoShipAt(marker.x, marker.y, snapshot)) {
+          this.state.markSpawned(EventSubject.LockedCrate, now, base.grid);
         }
 
         // A crate riding the Cargo Ship, rather than one dropped on land.
@@ -286,6 +373,11 @@ export class EventDetector {
       grid: this.grid(marker.x, marker.y),
       at: now,
     };
+
+    // The snapshot no longer contains this marker, so pass an empty one: a
+    // vanished crate cannot still be aboard a ship.
+    const subject = this.subjectFor(marker, []);
+    if (subject) this.state.markEnded(subject, now);
 
     switch (marker.type) {
       case MarkerType.PatrolHelicopter: {
