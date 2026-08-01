@@ -5,7 +5,7 @@
  * makes the whole of v1's event logic testable by replaying recorded marker
  * snapshots, instead of waiting for a real Patrol Helicopter to spawn.
  *
- * Two judgement calls live here and are worth understanding before tuning:
+ * Three judgement calls live here and are worth understanding before tuning:
  *
  *  - A CH47 is classified as an oil rig delivery purely by proximity to a rig
  *    monument, checked continuously for the Chinook's whole flight. There is no
@@ -17,9 +17,13 @@
  *    map edge, and the API does not say which. It is inferred from *where* it
  *    vanished: inland means destroyed, at the boundary means departed.
  *
- * Both are inferences, not facts the game reports. What the API genuinely
- * cannot show at all — oil rig crates, locked crate drops, explosions, the
- * Deep Sea zone — is documented in the README rather than guessed at here.
+ *  - A locked crate drop is invisible, since crate markers were removed. It is
+ *    inferred from the Chinook slowing to a hover beside a monument, which is
+ *    what it does while lowering the crate.
+ *
+ * All three are inferences, not facts the game reports, and each is documented
+ * where it is implemented. What remains genuinely unknowable — whether a crate
+ * is sitting on an oil rig, and the Deep Sea zone — is in the README.
  */
 
 import { formatGridPosition, getCorrectedMapSize, distance } from '../rustplus/grid.js';
@@ -86,12 +90,47 @@ export const EXPLOSION_MEMORY_MS = 90_000;
  */
 export const HELI_EDGE_MARGIN = 300;
 
+/**
+ * Inferring a locked crate drop from Chinook movement.
+ *
+ * Crate markers were removed from the companion API, so a dropped crate is
+ * invisible. What remains visible is the Chinook, and its behaviour gives the
+ * drop away: it cruises to a monument, slows to a near-stop while it lowers
+ * the crate, then departs. A sustained hover beside a monument is therefore a
+ * strong proxy for "a crate was just dropped here".
+ *
+ * These thresholds are reasoned from observed cruise speed rather than
+ * measured from a live drop, and are the first thing to tune if the inference
+ * proves noisy. `scripts/analyse-chinooks.mjs` prints speed profiles from
+ * recorded feeds for exactly that purpose.
+ */
+
+/** Below this speed (units/second) the Chinook is considered stationary. */
+export const CHINOOK_HOVER_SPEED = 5;
+
+/**
+ * Consecutive stationary samples required before calling it a drop.
+ *
+ * One sample could be a poll landing either side of a turn. Two consecutive
+ * samples is roughly ten seconds of not moving, which cruising never produces.
+ */
+export const CHINOOK_HOVER_SAMPLES = 2;
+
+/** How close the hover must be to a monument to attribute the drop to it. */
+export const CHINOOK_DROP_MONUMENT_RADIUS = 250;
+
 interface TrackedMarker {
   marker: RustMapMarker;
   firstSeen: Date;
   lastSeen: Date;
   /** Set for a CH47 that was announced as an oil rig crate call. */
   oilRig?: string;
+  /** Previous sample, for computing speed between polls. */
+  previous?: { x: number; y: number; at: Date };
+  /** Consecutive samples below the hover threshold. */
+  hoverSamples: number;
+  /** Set once a crate drop has been inferred, so it fires only once. */
+  droppedCrate?: boolean;
 }
 
 interface RememberedExplosion {
@@ -160,7 +199,7 @@ export class EventDetector {
        * No events are emitted and no timers are armed.
        */
       for (const marker of markers) {
-        this.tracked.set(marker.id, { marker, firstSeen: now, lastSeen: now });
+        this.tracked.set(marker.id, { marker, firstSeen: now, lastSeen: now, hoverSamples: 0, previous: { x: marker.x, y: marker.y, at: now } });
 
         const subject = this.subjectFor(marker, markers);
         if (subject) this.state.markPresentAtStartup(subject, now, this.grid(marker.x, marker.y));
@@ -183,13 +222,17 @@ export class EventDetector {
         // appeared. It spawns at the map edge and flies to its destination, so
         // checking only on arrival in the feed missed every oil rig delivery.
         events.push(...this.checkChinookReachedRig(marker, existing, now));
+        events.push(...this.checkChinookDroppedCrate(marker, existing, now));
+
+        // Recorded after the checks above, which need the prior sample.
+        existing.previous = { x: marker.x, y: marker.y, at: now };
 
         const subject = this.subjectFor(marker, markers);
         if (subject) this.state.markSeen(subject, now, this.grid(marker.x, marker.y));
         continue;
       }
 
-      const tracker: TrackedMarker = { marker, firstSeen: now, lastSeen: now };
+      const tracker: TrackedMarker = { marker, firstSeen: now, lastSeen: now, hoverSamples: 0, previous: { x: marker.x, y: marker.y, at: now } };
       this.tracked.set(marker.id, tracker);
       events.push(...this.onAppeared(marker, tracker, now, markers));
     }
@@ -315,6 +358,67 @@ export class EventDetector {
         grid: rigGrid,
         at: now,
         opensAt: unlocksAt,
+      },
+    ];
+  }
+
+  /**
+   * Has this Chinook just dropped a locked crate?
+   *
+   * Inferred from movement, because the crate itself is invisible: crate
+   * markers were removed from the companion API, so nothing appears on the map
+   * when one lands. What is still visible is the Chinook, which slows to a
+   * hover over the monument while lowering the crate and then flies on.
+   *
+   * Requiring several consecutive stationary samples beside a monument
+   * separates that from cruising, which never produces near-zero movement.
+   * This is an inference and is labelled as such in the alert — a hover is
+   * strong evidence of a drop, not proof of one.
+   *
+   * Oil rig deliveries also hover, so those are excluded: they have already
+   * been reported through the rig lifecycle.
+   */
+  private checkChinookDroppedCrate(
+    marker: RustMapMarker,
+    tracker: TrackedMarker,
+    now: Date,
+  ): DetectedEvent[] {
+    if (marker.type !== MarkerType.CH47) return [];
+    if (tracker.oilRig || tracker.droppedCrate) return [];
+
+    const previous = tracker.previous;
+    if (!previous) return [];
+
+    const seconds = (now.getTime() - previous.at.getTime()) / 1000;
+    if (seconds <= 0) return [];
+
+    const speed = distance(previous.x, previous.y, marker.x, marker.y) / seconds;
+
+    if (speed > CHINOOK_HOVER_SPEED) {
+      tracker.hoverSamples = 0;
+      return [];
+    }
+
+    tracker.hoverSamples += 1;
+    if (tracker.hoverSamples < CHINOOK_HOVER_SAMPLES) return [];
+
+    // A hover in open ground is not a drop worth reporting; crates land at
+    // monuments, and naming the monument is most of the value of the alert.
+    const monument = this.monuments.nearest(marker.x, marker.y, CHINOOK_DROP_MONUMENT_RADIUS);
+    if (!monument) return [];
+
+    tracker.droppedCrate = true;
+
+    return [
+      {
+        type: 'locked_crate',
+        phase: 'dropped',
+        markerId: String(marker.id),
+        monument: monument.displayName,
+        x: marker.x,
+        y: marker.y,
+        grid: this.grid(marker.x, marker.y),
+        at: now,
       },
     ];
   }
