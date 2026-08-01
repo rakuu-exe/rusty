@@ -37,6 +37,15 @@ import { ServerRuntime } from './serverRuntime.js';
 /** How often to re-check whether the Steam token is close to expiring. */
 const EXPIRY_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Minimum gap between rebuilding a server runtime.
+ *
+ * Each rebuild resets the reconnect backoff, so without this a burst of
+ * pairings keeps the client retrying aggressively against a server that is
+ * already refusing it.
+ */
+const RUNTIME_RESTART_COOLDOWN_MS = 60_000;
+
 export class App implements BotContext {
   readonly guildId: string;
   readonly timezone: string;
@@ -46,6 +55,8 @@ export class App implements BotContext {
   private readonly runtimes = new Map<string, ServerRuntime>();
   /** playerToken currently in use per server, to spot genuine re-pairing. */
   private readonly activeTokens = new Map<string, string>();
+  /** When each runtime was last (re)built, to avoid thrashing the backoff. */
+  private readonly lastRuntimeStart = new Map<string, number>();
 
   private guildConfig: DiscordConfigRow | null = null;
   private pairingListener: PairingListener | null = null;
@@ -131,6 +142,7 @@ export class App implements BotContext {
     });
 
     this.runtimes.set(id, runtime);
+    this.lastRuntimeStart.set(id, Date.now());
     await runtime.start();
   }
 
@@ -193,6 +205,27 @@ export class App implements BotContext {
       const existing = this.runtimes.get(row.id);
       if (existing && this.activeTokens.get(row.id) === notification.playerToken) {
         logger.debug({ server: row.name }, 'ignoring redelivered pairing for an unchanged token');
+        return;
+      }
+
+      /**
+       * Rebuilding the runtime resets the reconnect backoff, so a burst of
+       * pairings drags the client back to aggressive retries exactly when it
+       * should be easing off. Observed live: backoff had climbed to 16s and
+       * repeated pairings knocked it back to 3s each time, adding pressure to
+       * a connection that was already being refused.
+       *
+       * The newest token is already saved, so a skipped rebuild costs nothing
+       * -- the next reconnect picks it up.
+       */
+      const lastStart = this.lastRuntimeStart.get(row.id) ?? 0;
+      const sinceLastStart = Date.now() - lastStart;
+      if (existing && sinceLastStart < RUNTIME_RESTART_COOLDOWN_MS) {
+        logger.info(
+          { server: row.name, sinceLastStartMs: sinceLastStart },
+          'pairing accepted; deferring reconnect so backoff is not reset',
+        );
+        this.activeTokens.set(row.id, notification.playerToken);
         return;
       }
 
