@@ -66,9 +66,10 @@ function subject(event: DetectedEvent): string {
       return event.phase === 'opened' ? 'DEEP SEA OPENED' : 'DEEP SEA CLOSED';
 
     case 'ch47':
-      // Named for what it is doing. A Chinook heading to an oil rig is a
-      // different event entirely and never reaches this branch.
-      return event.phase === 'entered_map' ? 'CRATE CHINOOK ENTERED MAP' : 'CRATE CHINOOK LEFT MAP';
+      // Neutral on purpose: when a Chinook appears there is no way to know
+      // whether it is bound for an oil rig or a monument. If it reaches a rig,
+      // a separate Heavy Scientists event follows.
+      return event.phase === 'entered_map' ? 'CHINOOK 47 ENTERED MAP' : 'CHINOOK 47 LEFT MAP';
 
     case 'oil_rig_crate': {
       const rig = monument ?? 'OIL RIG';
@@ -136,7 +137,7 @@ export function formatEventLineInGame(event: DetectedEvent, options: FormatOptio
       return event.phase === 'opened' ? 'Deep Sea OPEN' : 'Deep Sea closed';
 
     case 'ch47':
-      return event.phase === 'entered_map' ? `Crate Chinook entered ${at}` : `Crate Chinook left ${at}`;
+      return event.phase === 'entered_map' ? `Chinook entered ${at}` : `Chinook left ${at}`;
 
     case 'oil_rig_crate': {
       const rig = event.monument ?? 'Oil Rig';

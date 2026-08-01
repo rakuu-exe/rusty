@@ -175,7 +175,7 @@ describe('formatEventLineInGame', () => {
   it('covers the remaining events', () => {
     expect(inGame({})).toBe('Heli entered @ W4');
     expect(inGame({ phase: 'downed' })).toBe('Heli DOWNED @ W4');
-    expect(inGame({ type: 'ch47', phase: 'entered_map', grid: 'P7' })).toBe('Crate Chinook entered @ P7');
+    expect(inGame({ type: 'ch47', phase: 'entered_map', grid: 'P7' })).toBe('Chinook entered @ P7');
     expect(inGame({ type: 'oil_rig_crate', phase: 'unlocked', monument: 'Small Oil Rig', grid: 'A0' })).toBe(
       'Small Oil Rig locked crate UNLOCKED @ A0',
     );

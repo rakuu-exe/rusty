@@ -49,6 +49,18 @@ export const HELI_DOWNED_RADIUS = 350;
 export const CARGO_CRATE_RADIUS = 200;
 
 /**
+ * How close a Chinook must get to a rig to count as delivering Heavy
+ * Scientists.
+ *
+ * Wider than the general monument radius because the marker is only sampled
+ * every few seconds while the Chinook is moving fast, so it can cross a tight
+ * radius entirely between two polls. False positives are unlikely: the rigs
+ * sit alone offshore, and a Chinook bound for a land monument has no reason to
+ * pass this close to one.
+ */
+export const OIL_RIG_CHINOOK_RADIUS = 300;
+
+/**
  * How long an Explosion stays relevant. The crash marker usually appears in
  * the same poll the heli disappears, but ordering is not guaranteed, so recent
  * explosions are remembered rather than only read from the current snapshot.
@@ -148,6 +160,11 @@ export class EventDetector {
         existing.marker = marker;
         existing.lastSeen = now;
 
+        // A Chinook is watched for its whole flight, not just judged where it
+        // appeared. It spawns at the map edge and flies to its destination, so
+        // checking only on arrival in the feed missed every oil rig delivery.
+        events.push(...this.checkChinookReachedRig(marker, existing, now));
+
         const subject = this.subjectFor(marker, markers);
         if (subject) this.state.markSeen(subject, now, this.grid(marker.x, marker.y));
         continue;
@@ -220,6 +237,57 @@ export class EventDetector {
     }
   }
 
+  /**
+   * Has this Chinook arrived at an oil rig?
+   *
+   * Called on every poll for as long as the Chinook exists, because it flies
+   * in from the map edge and only reaches the rig some way into its life.
+   * Judging it once, where it first appeared, missed every real delivery: four
+   * Chinooks reached the rigs in a single evening and all four were logged as
+   * ordinary map crossings.
+   *
+   * Fires at most once per Chinook — `tracker.oilRig` records that the
+   * delivery has been reported, so hovering over the rig for several polls
+   * does not re-announce it or re-arm the countdown.
+   */
+  private checkChinookReachedRig(
+    marker: RustMapMarker,
+    tracker: TrackedMarker,
+    now: Date,
+  ): DetectedEvent[] {
+    if (marker.type !== MarkerType.CH47) return [];
+    if (tracker.oilRig) return [];
+
+    const rig = this.monuments.oilRigAt(marker.x, marker.y, OIL_RIG_CHINOOK_RADIUS);
+    if (!rig) return [];
+
+    tracker.oilRig = rig.monument.displayName;
+
+    const subject = rig.kind === 'large' ? EventSubject.LargeOilRig : EventSubject.SmallOilRig;
+    const rigGrid = this.grid(rig.monument.x, rig.monument.y);
+
+    // The countdown is anchored to the Chinook's arrival at the rig, which is
+    // the moment the game actually reveals.
+    const unlocksAt = new Date(now.getTime() + OIL_RIG_CRATE_UNLOCK_MS);
+    this.state.markOilRigTriggered(subject, now, unlocksAt, rigGrid);
+
+    return [
+      {
+        type: 'oil_rig_crate',
+        phase: 'called',
+        markerId: String(marker.id),
+        monument: rig.monument.displayName,
+        // Report the rig's own position rather than the Chinook's, which may
+        // still be slightly out as it settles.
+        x: rig.monument.x,
+        y: rig.monument.y,
+        grid: rigGrid,
+        at: now,
+        opensAt: unlocksAt,
+      },
+    ];
+  }
+
   /** Cargo Ship marker nearest this position, if the crate is aboard one. */
   private cargoShipAt(x: number, y: number, snapshot: RustMapMarker[]): RustMapMarker | null {
     let best: { marker: RustMapMarker; dist: number } | null = null;
@@ -269,40 +337,21 @@ export class EventDetector {
 
       case MarkerType.CH47: {
         /**
-         * Three distinct events share this marker type and must never be
-         * merged: a Chinook delivering Heavy Scientists to Large Oil Rig, the
-         * same to Small Oil Rig, and a Chinook crossing the map to drop a
-         * locked crate at a monument. Proximity to a rig is the only signal
-         * that separates them.
+         * A Chinook's purpose is not knowable when it appears.
+         *
+         * It spawns at the map edge and flies onward, so at this moment it is
+         * simply "a Chinook entered the map". Whether it is delivering Heavy
+         * Scientists to Large Oil Rig, to Small Oil Rig, or crossing to drop a
+         * locked crate at a monument only becomes clear from where it goes —
+         * which is tracked by checkChinookReachedRig on later polls.
+         *
+         * It can still be at a rig already on the poll it appears, so that
+         * check runs here too.
          */
-        const rig = this.monuments.oilRigAt(marker.x, marker.y);
-        if (!rig) {
-          return [{ ...base, type: 'ch47', phase: 'entered_map' }];
-        }
+        const reached = this.checkChinookReachedRig(marker, tracker, now);
+        if (reached.length > 0) return reached;
 
-        const subject = rig.kind === 'large' ? EventSubject.LargeOilRig : EventSubject.SmallOilRig;
-        const rigGrid = this.grid(rig.monument.x, rig.monument.y);
-
-        // The countdown is anchored to the Chinook's arrival, the only moment
-        // the game actually reveals.
-        const unlocksAt = new Date(now.getTime() + OIL_RIG_CRATE_UNLOCK_MS);
-        this.state.markOilRigTriggered(subject, now, unlocksAt, rigGrid);
-
-        tracker.oilRig = rig.monument.displayName;
-        return [
-          {
-            ...base,
-            type: 'oil_rig_crate',
-            phase: 'called',
-            monument: rig.monument.displayName,
-            // Report the rig's own position rather than the Chinook's, which
-            // may still be a hundred units out on approach.
-            x: rig.monument.x,
-            y: rig.monument.y,
-            grid: rigGrid,
-            opensAt: unlocksAt,
-          },
-        ];
+        return [{ ...base, type: 'ch47', phase: 'entered_map' }];
       }
 
       case MarkerType.Crate: {

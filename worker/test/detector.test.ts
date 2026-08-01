@@ -169,6 +169,48 @@ describe('CH47 / oil rig', () => {
     expect(events[0]).toMatchObject({ type: 'ch47', phase: 'entered_map' });
   });
 
+  it('catches a Chinook that flies to a rig after entering the map', () => {
+    // The real-world case that was being missed entirely: a Chinook spawns at
+    // the map edge, is announced as a crossing, and only reaches the rig some
+    // polls later. Judging it once on arrival lost every rig delivery.
+    const d = detector();
+    d.update([], t0);
+
+    const entry = d.update([marker(20, MarkerType.CH47, 3900, 4600)], at(5));
+    expect(entry[0]).toMatchObject({ type: 'ch47', phase: 'entered_map' });
+
+    const arrival = d.update([marker(20, MarkerType.CH47, 3290, 3310)], at(30));
+    expect(arrival).toHaveLength(1);
+    expect(arrival[0]).toMatchObject({
+      type: 'oil_rig_crate',
+      phase: 'called',
+      monument: 'Large Oil Rig',
+    });
+    expect(arrival[0]!.opensAt!.getTime()).toBe(at(30).getTime() + OIL_RIG_CRATE_UNLOCK_MS);
+  });
+
+  it('announces a rig delivery only once while the Chinook hovers', () => {
+    const d = detector();
+    d.update([], t0);
+    d.update([marker(20, MarkerType.CH47, 3900, 4600)], at(5));
+    d.update([marker(20, MarkerType.CH47, 3290, 3310)], at(30));
+
+    // Still sitting on the rig several polls later.
+    expect(d.update([marker(20, MarkerType.CH47, 3300, 3300)], at(35))).toEqual([]);
+    expect(d.update([marker(20, MarkerType.CH47, 3305, 3295)], at(40))).toEqual([]);
+  });
+
+  it('routes an in-flight arrival to the correct rig', () => {
+    const d = detector();
+    d.update([], t0);
+    d.update([marker(21, MarkerType.CH47, 100, 3000)], at(5));
+
+    const arrival = d.update([marker(21, MarkerType.CH47, 810, 900)], at(30));
+    expect(arrival[0]).toMatchObject({ monument: 'Small Oil Rig' });
+    expect(d.state.get('oil_rig_large').oilRig?.phase).toBe('unknown');
+    expect(d.state.get('oil_rig_small').oilRig?.phase).toBe('triggered');
+  });
+
   it('announces departure for a crossing but not for a rig drop', () => {
     const d = detector();
     d.update([], t0);
