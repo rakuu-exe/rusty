@@ -24,7 +24,7 @@ import { formatClock, formatDuration } from '../format/message.js';
 import { EventSubject, describeState, type EventStateStore, type EventSubjectValue } from '../events/state.js';
 import { describeEstimate, estimateRespawn, type RespawnEstimate } from '../events/respawn.js';
 import { getRecentEvents } from '../db.js';
-import { deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
+import { DIRECTION_COMPASS, deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
 import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
 
@@ -58,11 +58,17 @@ function describeDeepSea(deps: InGameCommandDeps): string {
 
   const state = deepSeaState(anchor.openedAt);
 
+  // The zone covers a fixed half of the map for the whole wipe, so the
+  // direction is worth repeating on every reply rather than assumed known.
+  const where = anchor.direction
+    ? ` @ ${anchor.direction} (${DIRECTION_COMPASS[anchor.direction]})`
+    : '';
+
   if (state.open) {
     const warning = state.radiationPhase ? ' (RADIATION - closing)' : '';
-    return `Deep Sea: OPEN, closes in ~${formatDuration(state.closesInMs!)}${warning}`;
+    return `Deep Sea: OPEN${where}, closes in ~${formatDuration(state.closesInMs!)}${warning}`;
   }
-  return `Deep Sea: closed, opens in ~${formatDuration(state.opensInMs!)}`;
+  return `Deep Sea: closed${where}, opens in ~${formatDuration(state.opensInMs!)}`;
 }
 
 /**

@@ -139,7 +139,9 @@ describe('status reflects the state store', () => {
 
     const reply = await resolveInGameCommand('!large', deps(state));
     expect(reply).toContain('Heavy Scientists called');
-    expect(reply).toContain('unlocks in 15m');
+    // Durations floor, so a countdown armed 15 minutes out reads 14m once any
+    // time at all has passed.
+    expect(reply).toMatch(/unlocks in 1[45]m/);
   });
 
   it('!oil covers both rigs in one line', async () => {

@@ -25,9 +25,35 @@ export const DEEP_SEA_RADIATION_MS = 300_000; // 5m
 
 export const DEEP_SEA_CYCLE_MS = DEEP_SEA_OPEN_MS + DEEP_SEA_COOLDOWN_MS;
 
+/**
+ * Which half of the map the zone covers.
+ *
+ * Fixed for the whole wipe by `deepsea.forceentranceportaldirection` or the
+ * map seed, so unlike the countdown this only needs supplying once. It is not
+ * detectable for the same reason the zone itself is not: nothing about it
+ * reaches the marker feed.
+ */
+export type DeepSeaDirection = 'TOP' | 'BOTTOM' | 'LEFT' | 'RIGHT';
+
+export const DEEP_SEA_DIRECTIONS: DeepSeaDirection[] = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'];
+
+/** Compass wording, since the game describes the zone by hemisphere. */
+export const DIRECTION_COMPASS: Record<DeepSeaDirection, string> = {
+  TOP: 'North',
+  BOTTOM: 'South',
+  LEFT: 'West',
+  RIGHT: 'East',
+};
+
+export function isDeepSeaDirection(value: string): value is DeepSeaDirection {
+  return (DEEP_SEA_DIRECTIONS as string[]).includes(value);
+}
+
 export interface DeepSeaAnchor {
   /** A confirmed time at which the zone opened. */
   openedAt: Date;
+  /** Which half of the map it covers, if known. */
+  direction?: DeepSeaDirection;
 }
 
 /**

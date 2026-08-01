@@ -4,6 +4,9 @@ import {
   anchorFromClosesIn,
   deepSeaState,
   parseDuration,
+  DEEP_SEA_DIRECTIONS,
+  DIRECTION_COMPASS,
+  isDeepSeaDirection,
 } from '../src/events/deepSea.js';
 
 const now = new Date('2026-08-01T12:00:00Z');
@@ -56,5 +59,20 @@ describe('anchorFromClosesIn', () => {
 
     const corrected = anchorFromClosesIn(126 * 60_000, now);
     expect(deepSeaState(corrected.openedAt, now).closesInMs).toBe(126 * 60_000);
+  });
+});
+
+describe('direction', () => {
+  it('accepts the four halves and rejects anything else', () => {
+    for (const d of DEEP_SEA_DIRECTIONS) expect(isDeepSeaDirection(d)).toBe(true);
+    expect(isDeepSeaDirection('NORTH')).toBe(false);
+    expect(isDeepSeaDirection('')).toBe(false);
+  });
+
+  it('maps each half to the compass wording the game uses', () => {
+    expect(DIRECTION_COMPASS.TOP).toBe('North');
+    expect(DIRECTION_COMPASS.BOTTOM).toBe('South');
+    expect(DIRECTION_COMPASS.LEFT).toBe('West');
+    expect(DIRECTION_COMPASS.RIGHT).toBe('East');
   });
 });

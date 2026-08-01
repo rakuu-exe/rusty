@@ -18,6 +18,7 @@ import {
 } from './db.js';
 import { CARGO_SHIP_EGRESS_MS, EventDetector } from './events/detector.js';
 import { EventSubject, type EventStateStore } from './events/state.js';
+import { isDeepSeaDirection, type DeepSeaDirection } from './events/deepSea.js';
 import { MarkerPoller } from './events/poller.js';
 import { TimerScheduler } from './events/timers.js';
 import type { DetectedEvent } from './events/types.js';
@@ -55,6 +56,8 @@ export class ServerRuntime {
    * Persisted, because the convar cycle keeps running across bot restarts.
    */
   private deepSeaAnchor: Date | null = null;
+  /** Fixed for the whole wipe, so it outlives any single anchor. */
+  private deepSeaDirection: DeepSeaDirection | null = null;
   private mapSize: number | null = null;
   private lastInfo: { players: number; maxPlayers: number } | null = null;
 
@@ -145,6 +148,8 @@ export class ServerRuntime {
       // recorded anchor stays valid and is restored rather than re-asked for.
       const anchor = await getLastEvent(row.id, 'deep_sea', 'opened');
       this.deepSeaAnchor = anchor ? new Date(anchor.created_at) : null;
+      this.deepSeaDirection =
+        anchor?.grid && isDeepSeaDirection(anchor.grid) ? anchor.grid : null;
 
       this.chat = new InGameChatHandler(
         {
@@ -154,7 +159,10 @@ export class ServerRuntime {
           timezone: this.options.timezone,
           // Commands read these and never write to them.
           state: detector.state,
-          getDeepSeaAnchor: () => (this.deepSeaAnchor ? { openedAt: this.deepSeaAnchor } : null),
+          getDeepSeaAnchor: () =>
+            this.deepSeaAnchor
+              ? { openedAt: this.deepSeaAnchor, ...(this.deepSeaDirection ? { direction: this.deepSeaDirection } : {}) }
+              : null,
         },
         this.selfMessages,
       );
@@ -315,14 +323,21 @@ export class ServerRuntime {
    * Sea has no marker, so this is a human observation being entered, not the
    * bot inferring anything.
    */
-  async recordDeepSeaOpened(at: Date): Promise<void> {
+  async recordDeepSeaOpened(at: Date, direction: DeepSeaDirection | null): Promise<void> {
+    // The direction is fixed for the whole wipe, so re-anchoring the countdown
+    // without restating it keeps the one already known.
+    const resolved = direction ?? this.deepSeaDirection;
+
     await recordEvent({
       serverId: this.serverId,
       eventType: 'deep_sea',
       phase: 'opened',
-      // No position: Deep Sea covers a whole hemisphere.
+      // Reuses the grid column: Deep Sea has no cell, but it does have a half.
+      grid: resolved,
     });
+
     this.deepSeaAnchor = at;
+    this.deepSeaDirection = resolved;
   }
 
   /** Current session state, for read-only reporting. */
@@ -332,6 +347,10 @@ export class ServerRuntime {
 
   get deepSeaOpenedAt(): Date | null {
     return this.deepSeaAnchor;
+  }
+
+  get deepSeaDirectionValue(): DeepSeaDirection | null {
+    return this.deepSeaDirection;
   }
 
   async status(): Promise<ServerStatus> {

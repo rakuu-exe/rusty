@@ -1,3 +1,4 @@
+import type { DeepSeaDirection } from '../events/deepSea.js';
 /**
  * What the slash commands are allowed to ask of the worker.
  *
@@ -57,5 +58,8 @@ export interface BotContext {
    * reliable than catching the exact moment the zone opens. Null means "it is
    * opening right now".
    */
-  recordDeepSeaOpened(closesInMs: number | null): Promise<{ server: string; closesInMs: number }[]>;
+  recordDeepSeaOpened(
+    closesInMs: number | null,
+    direction: DeepSeaDirection | null,
+  ): Promise<{ server: string; closesInMs: number; direction?: DeepSeaDirection }[]>;
 }

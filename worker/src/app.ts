@@ -23,6 +23,7 @@ import {
 import { DiscordBot } from './discord/bot.js';
 import { anchorFromClosesIn, deepSeaState } from './events/deepSea.js';
 import type { BotContext, PairingStatus, ServerStatus } from './discord/context.js';
+import type { DeepSeaDirection } from './events/deepSea.js';
 import { logger } from './logger.js';
 import {
   PairingListener,
@@ -295,19 +296,24 @@ export class App implements BotContext {
     this.guildConfig = await upsertGuildConfig(this.guildId, { team_chat_channel_id: channelId });
   }
 
-  async recordDeepSeaOpened(closesInMs: number | null): Promise<{ server: string; closesInMs: number }[]> {
+  async recordDeepSeaOpened(
+    closesInMs: number | null,
+    direction: DeepSeaDirection | null,
+  ): Promise<{ server: string; closesInMs: number; direction?: DeepSeaDirection }[]> {
     const now = new Date();
     // Work backwards from the in-game countdown when one was given, so the
     // anchor is correct even though the open moment was not witnessed.
     const anchor = closesInMs === null ? { openedAt: now } : anchorFromClosesIn(closesInMs, now);
 
-    const results: { server: string; closesInMs: number }[] = [];
+    const results: { server: string; closesInMs: number; direction?: DeepSeaDirection }[] = [];
 
     for (const runtime of this.runtimes.values()) {
-      await runtime.recordDeepSeaOpened(anchor.openedAt);
+      await runtime.recordDeepSeaOpened(anchor.openedAt, direction);
+      const resolved = runtime.deepSeaDirectionValue;
       results.push({
         server: (await runtime.status()).name,
         closesInMs: deepSeaState(anchor.openedAt, now).closesInMs ?? 0,
+        ...(resolved ? { direction: resolved } : {}),
       });
     }
 

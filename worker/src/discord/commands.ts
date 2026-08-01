@@ -24,7 +24,7 @@ import {
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { formatClock, formatDuration } from '../format/message.js';
-import { DEEP_SEA_OPEN_MS, parseDuration } from '../events/deepSea.js';
+import { DEEP_SEA_OPEN_MS, DIRECTION_COMPASS, isDeepSeaDirection, parseDuration } from '../events/deepSea.js';
 import { logger } from '../logger.js';
 import type { BotContext } from './context.js';
 
@@ -73,6 +73,18 @@ export const commandDefinitions = [
         .setName('closes_in')
         .setDescription('Countdown shown in game, e.g. "2h6m". Leave empty if it just opened.')
         .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('direction')
+        .setDescription('Which half of the map it covers. Fixed for the whole wipe.')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Top / North', value: 'TOP' },
+          { name: 'Bottom / South', value: 'BOTTOM' },
+          { name: 'Left / West', value: 'LEFT' },
+          { name: 'Right / East', value: 'RIGHT' },
+        ),
     )
     .toJSON(),
 
@@ -293,16 +305,22 @@ async function handleDeepSeaAnchor(
     }
   }
 
+  // Omitting the direction keeps whatever was set before, since it does not
+  // change until the next wipe.
+  const rawDirection = interaction.options.getString('direction', false);
+  const direction = rawDirection && isDeepSeaDirection(rawDirection) ? rawDirection : null;
+
   try {
-    const results = await context.recordDeepSeaOpened(closesInMs);
+    const results = await context.recordDeepSeaOpened(closesInMs, direction);
     if (results.length === 0) {
       await interaction.editReply('❌ No connected server to anchor.');
       return;
     }
 
-    const lines = results.map(
-      (r) => `✅ **${r.server}** — Deep Sea closes in ~${formatDuration(r.closesInMs)}`,
-    );
+    const lines = results.map((r) => {
+      const where = r.direction ? ` @ ${r.direction} (${DIRECTION_COMPASS[r.direction as keyof typeof DIRECTION_COMPASS]})` : '';
+      return `✅ **${r.server}** — Deep Sea${where} closes in ~${formatDuration(r.closesInMs)}`;
+    });
     lines.push(
       '',
       raw === null
