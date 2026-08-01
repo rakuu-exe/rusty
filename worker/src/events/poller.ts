@@ -10,9 +10,12 @@ import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
 import type { EventDetector } from './detector.js';
 import type { DetectedEvent } from './types.js';
+import type { RustMapMarker } from '../rustplus/types.js';
 
 export interface MarkerPollerEvents {
   events: [events: DetectedEvent[]];
+  /** The raw snapshot, for consumers other than the event detector. */
+  markers: [markers: RustMapMarker[]];
   error: [error: Error];
 }
 
@@ -75,6 +78,8 @@ export class MarkerPoller extends EventEmitter<MarkerPollerEvents> {
       }
 
       const events = this.detector.update(markers);
+      // Vending shares the same snapshot; it costs no extra rate-limit tokens.
+      this.emit('markers', markers);
       this.consecutiveFailures = 0;
 
       if (events.length > 0) {

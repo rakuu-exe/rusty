@@ -41,6 +41,10 @@ RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
+# Item id to name map for the vending system. Without it every item renders as
+# a raw numeric id, which still works but is useless to read.
+COPY data ./data
+
 # Not a web service: no port is exposed and no HTTP server is started. It holds
 # a Discord gateway connection and a Rust+ WebSocket, and that is all.
 CMD ["node", "dist/index.js"]

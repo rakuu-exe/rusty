@@ -25,6 +25,8 @@ import { EventSubject, describeState, type EventStateStore, type EventSubjectVal
 import { describeEstimate, estimateRespawn, type RespawnEstimate } from '../events/respawn.js';
 import { getRecentEvents } from '../db.js';
 import { DIRECTION_COMPASS, deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
+import { resolveVendingCommand } from '../vending/commands.js';
+import type { VendingStore } from '../vending/store.js';
 import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
 
@@ -39,6 +41,8 @@ export interface InGameCommandDeps {
   state: EventStateStore;
   /** IANA timezone for rendering spawn times. */
   timezone?: string;
+  /** Vending session state, when the vending system is enabled. */
+  vending?: VendingStore;
   /** Supplies the Deep Sea anchor, if one has been recorded. */
   getDeepSeaAnchor?: () => DeepSeaAnchor | null;
 }
@@ -122,8 +126,13 @@ export async function resolveInGameCommand(
   const trimmed = message.trim();
   if (!trimmed.startsWith(deps.prefix)) return null;
 
-  const [rawCommand] = trimmed.slice(deps.prefix.length).trim().toLowerCase().split(/\s+/);
+  const body = trimmed.slice(deps.prefix.length).trim();
+  const [rawCommand] = body.toLowerCase().split(/\s+/);
   if (!rawCommand) return null;
+
+  // Arguments keep their original case: item names are searched
+  // case-insensitively, but a grid like "D12" reads better as typed.
+  const args = body.slice(rawCommand.length).trim();
 
   const { client, state } = deps;
   const timezone = deps.timezone ?? 'UTC';
@@ -138,6 +147,16 @@ export async function resolveInGameCommand(
     const estimate = await estimateFor(deps, subject);
     return estimate ? `${base} — ${describeEstimate(estimate, formatDuration)}` : base;
   };
+
+  // Vending owns its own command set. Returns null for anything else, so this
+  // falls through to the event commands below.
+  if (deps.vending) {
+    const vendingReply = resolveVendingCommand(rawCommand, args, {
+      store: deps.vending,
+      formatClock: formatters.clock,
+    });
+    if (vendingReply !== null) return vendingReply;
+  }
 
   switch (rawCommand) {
     // ---- event status, all pure reads -------------------------------------
@@ -215,7 +234,7 @@ export async function resolveInGameCommand(
     }
 
     case 'help':
-      return `Commands: ${['heli', 'cargo', 'large', 'small', 'oil', 'chinook', 'vendor', 'crate', 'deepsea', 'events', 'time', 'pop', 'wipe', 'status']
+      return `Commands: ${['heli', 'cargo', 'large', 'small', 'oil', 'chinook', 'vendor', 'crate', 'deepsea', 'events', 'time', 'pop', 'wipe', 'status', 'vend <item>', 'price <item>', 'vendstats', 'vendcommon', 'vendhistory <item>', 'vendtrack']
         .map((c) => deps.prefix + c)
         .join(' ')}`;
 

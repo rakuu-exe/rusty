@@ -8,6 +8,7 @@
 import { existsSync } from 'node:fs';
 import { App } from './app.js';
 import { loadConfig } from './config.js';
+import { loadItems } from './vending/items.js';
 import { logger } from './logger.js';
 
 /**
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
   loadDotEnv();
 
   const settings = loadConfig();
+  loadItems();
   logger.info({ timezone: settings.TIMEZONE, pollMs: settings.POLL_INTERVAL_MS }, 'starting worker');
 
   const app = new App(settings);

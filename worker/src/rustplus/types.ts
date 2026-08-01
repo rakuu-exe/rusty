@@ -42,6 +42,19 @@ export interface RustMapMarker {
   radius?: number;
   name?: string;
   outOfStock?: boolean;
+  /**
+   * Present on vending machines and genuinely populated, unlike crate markers.
+   * Verified live: 153 of 167 machines carried orders, 724 in total.
+   */
+  sellOrders?: {
+    itemId?: number;
+    quantity?: number;
+    currencyId?: number;
+    costPerItem?: number;
+    amountInStock?: number;
+    itemIsBlueprint?: boolean;
+    currencyIsBlueprint?: boolean;
+  }[];
 }
 
 export interface RustMapMonument {

@@ -28,6 +28,10 @@ import { logger } from './logger.js';
 import { RustPlusClient } from './rustplus/client.js';
 import { formatGridPosition } from './rustplus/grid.js';
 import { MonumentIndex } from './rustplus/monuments.js';
+import type { RustMapMarker } from './rustplus/types.js';
+import { VendingStore } from './vending/store.js';
+import { toVendingMachines } from './vending/decode.js';
+import { describeVendingEvent, isAnnounceableVendingEvent } from './vending/format.js';
 import type { DiscordBot } from './discord/bot.js';
 import type { ServerStatus } from './discord/context.js';
 
@@ -49,6 +53,8 @@ export class ServerRuntime {
   private poller: MarkerPoller | null = null;
   private chat: InGameChatHandler | null = null;
   private readonly selfMessages = new SelfMessageTracker();
+  /** Vending session state. In memory by design: history is session-scoped. */
+  private readonly vending = new VendingStore();
   /** Rebuilt on every connection, since a wipe invalidates world state. */
   private detector: EventDetector | null = null;
   /**
@@ -159,6 +165,7 @@ export class ServerRuntime {
           timezone: this.options.timezone,
           // Commands read these and never write to them.
           state: detector.state,
+          vending: this.vending,
           getDeepSeaAnchor: () =>
             this.deepSeaAnchor
               ? { openedAt: this.deepSeaAnchor, ...(this.deepSeaDirection ? { direction: this.deepSeaDirection } : {}) }
@@ -170,6 +177,7 @@ export class ServerRuntime {
       this.poller?.stop();
       this.poller = new MarkerPoller(this.client, detector, this.options.pollIntervalMs);
       this.poller.on('events', (events) => void this.onEvents(events));
+      this.poller.on('markers', (markers) => void this.onVendingSnapshot(markers, info.mapSize));
       this.poller.start();
 
       const channel = this.options.getEventChannelId();
@@ -208,6 +216,37 @@ export class ServerRuntime {
     const monuments = map.monuments.map((m) => ({ token: m.token, x: m.x, y: m.y }));
     await replaceMonuments(row.id, monuments);
     return monuments;
+  }
+
+  /**
+   * Feed vending machines from the same snapshot the detector uses.
+   *
+   * Costs no extra rate-limit tokens, since it is the poll that already
+   * happened. Only tracked-item hits are announced: a busy server churns
+   * hundreds of stock changes an hour, and announcing them all would bury the
+   * channel. Everything else is still recorded for the commands to read.
+   */
+  private async onVendingSnapshot(markers: RustMapMarker[], mapSize: number): Promise<void> {
+    const machines = toVendingMachines(markers, mapSize);
+    const events = this.vending.update(machines);
+
+    for (const event of events.filter((e) => isAnnounceableVendingEvent(e.kind))) {
+      const line = describeVendingEvent(event);
+      try {
+        const channel = this.options.getEventChannelId();
+        if (channel) await this.options.bot.postText(channel, `🛒 ${line}`);
+
+        if (this.client.isConnected) {
+          this.selfMessages.remember(line);
+          await this.client.sendTeamMessage(line);
+        }
+      } catch (error) {
+        logger.warn(
+          { err: error instanceof Error ? error.message : String(error) },
+          'failed to announce vending change',
+        );
+      }
+    }
   }
 
   private async onEvents(events: DetectedEvent[]): Promise<void> {
