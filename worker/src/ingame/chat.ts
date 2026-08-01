@@ -11,11 +11,12 @@
  * `!heli` from starving the polling loop.
  */
 
-import { getLastEvent, getLastOilRigEvent } from '../db.js';
+import { getLastEvent, getLastOilRigEvent, getRecentEvents, recordEvent } from '../db.js';
 import type { EventLogRow } from '../db.js';
 import { formatDuration } from '../format/message.js';
 import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
+import { deepSeaState, estimateRespawn, type RespawnEstimate } from '../events/respawn.js';
 
 /** Minimum gap between replies to one team, in ms. */
 export const REPLY_COOLDOWN_MS = 3_000;
@@ -61,6 +62,95 @@ async function describeOilRig(serverId: string, label: string): Promise<string> 
   }
 
   return `${label}: crate called ${ago} ago${where}`;
+}
+
+/** Which event marks a "spawn" for each `!when-*` subject. */
+const RESPAWN_SUBJECTS = {
+  cargo: { label: 'Cargo', type: 'cargo_ship', phase: 'entered_map' },
+  crate: { label: 'Chinook crate', type: 'ch47', phase: 'entered_map' },
+  heli: { label: 'Heli', type: 'patrol_helicopter', phase: 'entered_map' },
+  loil: { label: 'Large Oil Rig', type: 'oil_rig_crate', phase: 'called', monument: 'Large Oil Rig' },
+  smoil: { label: 'Small Oil Rig', type: 'oil_rig_crate', phase: 'called', monument: 'Small Oil Rig' },
+  oil: { label: 'Oil Rig', type: 'oil_rig_crate', phase: 'called' },
+  vendor: { label: 'Vendor', type: 'travelling_vendor', phase: 'entered_map' },
+} as const satisfies Record<string, { label: string; type: string; phase: string; monument?: string }>;
+
+export type RespawnSubject = keyof typeof RESPAWN_SUBJECTS;
+
+/**
+ * Is the thing currently on the map?
+ *
+ * Derived from whether the most recent event for it was an arrival rather than
+ * a departure, which avoids keeping separate live state that a restart loses.
+ */
+function isActive(latest: EventLogRow | null): boolean {
+  if (!latest) return false;
+  return latest.phase === 'entered_map' || latest.phase === 'called' || latest.phase === 'spawned';
+}
+
+/** Renders a respawn estimate as a short chat line. */
+function describeRespawn(label: string, estimate: RespawnEstimate): string {
+  const active = estimate.active ? `${label}: on the map now` : null;
+
+  if (estimate.intervalMs === null) {
+    // No usable history, so any number quoted would be invented.
+    const seen =
+      estimate.sinceLastMs === null
+        ? 'never seen yet'
+        : `last seen ${formatDuration(estimate.sinceLastMs)} ago`;
+    return active
+      ? `${active} (${seen}, still learning the cycle)`
+      : `${label}: ${seen} — not enough history to estimate yet`;
+  }
+
+  const every = `~every ${formatDuration(estimate.intervalMs)}`;
+  const basis = `from ${estimate.observations} spawns`;
+
+  if (estimate.active) return `${active}, ${every} ${basis}`;
+
+  const next = estimate.nextInMs!;
+  if (next <= 0) return `${label}: due now (overdue ${formatDuration(-next)}, ${every})`;
+  return `${label}: ~${formatDuration(next)} (${every}, ${basis})`;
+}
+
+async function describeSubjectRespawn(serverId: string, subject: RespawnSubject): Promise<string> {
+  const spec = RESPAWN_SUBJECTS[subject];
+  const monument = 'monument' in spec ? spec.monument : undefined;
+
+  const [spawns, latest] = await Promise.all([
+    getRecentEvents(serverId, spec.type, spec.phase, { limit: 10, ...(monument ? { monument } : {}) }),
+    monument ? getLastOilRigEvent(serverId, monument) : getLastEvent(serverId, spec.type),
+  ]);
+
+  const estimate = estimateRespawn(
+    spawns.map((row) => new Date(row.created_at)),
+    { active: isActive(latest) },
+  );
+
+  return describeRespawn(spec.label, estimate);
+}
+
+/**
+ * Deep Sea, which cannot be observed at all.
+ *
+ * It has no Rust+ map marker — it is a zone, not an entity — so nothing in the
+ * marker feed reveals it. Its cycle is fixed by convars though, so one
+ * confirmed open time is enough to project every open and close from then on.
+ */
+async function describeDeepSea(serverId: string): Promise<string> {
+  const anchor = await getLastEvent(serverId, 'deep_sea', 'opened');
+  if (!anchor) {
+    return 'Deep Sea: no anchor set — type !deepsea-open the moment it opens and I can predict it from then on';
+  }
+
+  const state = deepSeaState(new Date(anchor.created_at));
+
+  if (state.open) {
+    const warning = state.radiationPhase ? ' (RADIATION - closing)' : '';
+    return `Deep Sea: OPEN, closes in ~${formatDuration(state.closesInMs!)}${warning}`;
+  }
+
+  return `Deep Sea: closed, opens in ~${formatDuration(state.opensInMs!)}`;
 }
 
 /**
@@ -127,12 +217,40 @@ export async function resolveInGameCommand(
       return `${info.name} — ${info.players}/${info.maxPlayers} online`;
     }
 
-    case 'help':
-      return `Commands: ${['heli', 'cargo', 'chinook', 'large', 'small', 'crate', 'time', 'pop', 'wipe', 'status']
-        .map((c) => deps.prefix + c)
-        .join(' ')}`;
+    case 'vendor':
+      return describeEvent(serverId, 'travelling_vendor', 'Vendor');
 
-    default:
+    case 'deepsea':
+      return describeDeepSea(serverId);
+
+    /**
+     * Anchors the Deep Sea cycle. Someone must say this the moment it opens,
+     * because there is no marker for the bot to see it happen.
+     */
+    case 'deepsea-open':
+    case 'deepsea-opened': {
+      await recordEvent({ serverId, eventType: 'deep_sea', phase: 'opened' });
+      const state = deepSeaState(new Date());
+      return `Deep Sea anchored as open now — closes in ~${formatDuration(state.closesInMs!)}`;
+    }
+
+    case 'help':
+      return `Commands: ${['heli', 'cargo', 'chinook', 'large', 'small', 'crate', 'vendor', 'deepsea', 'time', 'pop', 'wipe', 'status']
+        .map((c) => deps.prefix + c)
+        .join(' ')} | ${deps.prefix}when-<cargo|crate|heli|loil|smoil|oil|vendor|deepsea>`;
+
+    default: {
+      // !when-<subject> respawn estimates.
+      const when = rawCommand.match(/^when-(.+)$/);
+      if (when) {
+        const subject = when[1]!;
+        if (subject === 'deepsea') return describeDeepSea(serverId);
+        if (subject in RESPAWN_SUBJECTS) {
+          return describeSubjectRespawn(serverId, subject as RespawnSubject);
+        }
+        return null;
+      }
+    }
       // Unknown text starting with the prefix is ignored rather than answered,
       // so ordinary team chat using "!" does not draw a reply every time.
       return null;

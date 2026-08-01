@@ -309,6 +309,36 @@ export async function getLastOilRigEvent(
   return (data?.[0] as EventLogRow | undefined) ?? null;
 }
 
+/**
+ * Recent occurrences of one event phase, newest first.
+ *
+ * Feeds the `!when-*` respawn predictions, which derive each server's actual
+ * cadence from observed spawns rather than assuming vanilla timings.
+ *
+ * `monument` filters the two oil rigs apart, since they share an event type.
+ */
+export async function getRecentEvents(
+  serverId: string,
+  eventType: string,
+  phase: string,
+  options: { limit?: number; monument?: string } = {},
+): Promise<EventLogRow[]> {
+  let query = db()
+    .from('event_log')
+    .select('*')
+    .eq('server_id', serverId)
+    .eq('event_type', eventType)
+    .eq('phase', phase)
+    .order('created_at', { ascending: false })
+    .limit(options.limit ?? 10);
+
+  if (options.monument) query = query.eq('raw->>monument', options.monument);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to load recent events: ${error.message}`);
+  return (data ?? []) as EventLogRow[];
+}
+
 // ---------------------------------------------------------------------------
 // Timers
 // ---------------------------------------------------------------------------

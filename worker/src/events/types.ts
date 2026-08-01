@@ -6,7 +6,13 @@ export type RustEventType =
   | 'cargo_crate'
   | 'ch47'
   | 'oil_rig_crate'
-  | 'locked_crate';
+  | 'locked_crate'
+  | 'travelling_vendor'
+  /**
+   * Deep Sea has no map marker and is never detected — it is recorded only
+   * when someone tells the bot it opened, which anchors the convar cycle.
+   */
+  | 'deep_sea';
 
 export type RustEventPhase =
   | 'entered_map'
@@ -16,7 +22,9 @@ export type RustEventPhase =
   | 'unlocked'
   | 'egress'
   | 'dropped'
-  | 'spawned';
+  | 'spawned'
+  | 'opened'
+  | 'closed';
 
 export interface DetectedEvent {
   type: RustEventType;

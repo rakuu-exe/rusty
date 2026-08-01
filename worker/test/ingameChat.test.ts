@@ -5,6 +5,8 @@ import type { RustPlusClient } from '../src/rustplus/client.js';
 vi.mock('../src/db.js', () => ({
   getLastEvent: vi.fn(async () => null),
   getLastOilRigEvent: vi.fn(async () => null),
+  getRecentEvents: vi.fn(async () => []),
+  recordEvent: vi.fn(async () => true),
 }));
 
 function fakeClient(): RustPlusClient & { sent: string[] } {
@@ -99,5 +101,32 @@ describe('InGameChatHandler', () => {
     await handler.handle(PAIRED_STEAM_ID, 'anyone got scrap');
 
     expect(client.sent).toHaveLength(0);
+  });
+});
+
+describe('!when-* respawn commands', () => {
+  const deps = { serverId: 's1', client: fakeClient(), prefix: '!' };
+
+  it('routes every documented subject', async () => {
+    for (const c of ['when-cargo', 'when-crate', 'when-heli', 'when-loil', 'when-smoil', 'when-oil', 'when-vendor']) {
+      const reply = await resolveInGameCommand(`!${c}`, deps);
+      expect(reply, c).not.toBeNull();
+      // With no history the reply must say so rather than invent a number.
+      expect(reply, c).toMatch(/not enough history|never seen yet/);
+    }
+  });
+
+  it('tells you Deep Sea needs anchoring, since it has no map marker', async () => {
+    const reply = await resolveInGameCommand('!when-deepsea', deps);
+    expect(reply).toContain('no anchor set');
+    expect(reply).toContain('!deepsea-open');
+  });
+
+  it('ignores an unknown when- subject', async () => {
+    expect(await resolveInGameCommand('!when-banana', deps)).toBeNull();
+  });
+
+  it('still handles the plain commands alongside them', async () => {
+    expect(await resolveInGameCommand('!vendor', deps)).toBe('Vendor: nothing seen yet');
   });
 });

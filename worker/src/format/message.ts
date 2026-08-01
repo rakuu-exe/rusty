@@ -59,6 +59,12 @@ function subject(event: DetectedEvent): string {
     case 'cargo_crate':
       return 'CARGO SHIP CRATE SPAWNED';
 
+    case 'travelling_vendor':
+      return event.phase === 'entered_map' ? 'TRAVELLING VENDOR ENTERED MAP' : 'TRAVELLING VENDOR LEFT MAP';
+
+    case 'deep_sea':
+      return event.phase === 'opened' ? 'DEEP SEA OPENED' : 'DEEP SEA CLOSED';
+
     case 'ch47':
       return event.phase === 'entered_map' ? 'CHINOOK 47 ENTERED MAP' : 'CHINOOK 47 LEFT MAP';
 
@@ -115,6 +121,13 @@ export function formatEventLineInGame(event: DetectedEvent, options: FormatOptio
     case 'cargo_crate':
       return `Cargo crate spawned ${at}`;
 
+    case 'travelling_vendor':
+      return event.phase === 'entered_map' ? `Vendor entered ${at}` : `Vendor left ${at}`;
+
+    case 'deep_sea':
+      // No position: Deep Sea is a whole hemisphere, not a point on the map.
+      return event.phase === 'opened' ? 'Deep Sea OPEN' : 'Deep Sea closed';
+
     case 'ch47':
       return event.phase === 'entered_map' ? `Chinook entered ${at}` : `Chinook left ${at}`;
 
@@ -141,6 +154,10 @@ export function eventColor(event: DetectedEvent): number {
       return 0x3498db;
     case 'cargo_crate':
       return 0x1abc9c;
+    case 'travelling_vendor':
+      return 0x8e44ad;
+    case 'deep_sea':
+      return event.phase === 'opened' ? 0x16a085 : 0x7f8c8d;
     case 'ch47':
       return 0x9b59b6;
     case 'oil_rig_crate':
@@ -158,6 +175,10 @@ export function eventEmoji(event: DetectedEvent): string {
       return '🚢';
     case 'cargo_crate':
       return '🧰';
+    case 'travelling_vendor':
+      return '🛒';
+    case 'deep_sea':
+      return '🌊';
     case 'ch47':
       return '🚁';
     case 'oil_rig_crate':

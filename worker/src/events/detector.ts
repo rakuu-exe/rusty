@@ -198,6 +198,9 @@ export class EventDetector {
       case MarkerType.CargoShip:
         return [{ ...base, type: 'cargo_ship', phase: 'entered_map' }];
 
+      case MarkerType.TravellingVendor:
+        return [{ ...base, type: 'travelling_vendor', phase: 'entered_map' }];
+
       case MarkerType.CH47: {
         // The branch that decides whether this is an oil rig crate call.
         const rig = this.monuments.oilRigAt(marker.x, marker.y);
@@ -270,6 +273,9 @@ export class EventDetector {
 
       case MarkerType.CargoShip:
         return [{ ...base, type: 'cargo_ship', phase: 'left_map' }];
+
+      case MarkerType.TravellingVendor:
+        return [{ ...base, type: 'travelling_vendor', phase: 'left_map' }];
 
       case MarkerType.CH47:
         // A Chinook that was announced as an oil rig call has already told the
