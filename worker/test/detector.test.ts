@@ -183,9 +183,33 @@ describe('CH47 / oil rig', () => {
 });
 
 describe('crates', () => {
-  it('ignores the crate that permanently sits on an oil rig', () => {
+  it('announces a crate respawning on an oil rig', () => {
+    // Regression: these were discarded outright, so rig respawns -- the thing
+    // !when-loil is about -- were never announced at all.
     const d = detector();
     d.update([], t0);
+
+    const events = d.update([marker(30, MarkerType.Crate, 3300, 3300)], at(5));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'oil_rig_crate',
+      phase: 'spawned',
+      monument: 'Large Oil Rig',
+    });
+  });
+
+  it('distinguishes the two rigs when a crate respawns', () => {
+    const d = detector();
+    d.update([], t0);
+
+    const events = d.update([marker(30, MarkerType.Crate, 805, 895)], at(5));
+    expect(events[0]).toMatchObject({ type: 'oil_rig_crate', phase: 'spawned', monument: 'Small Oil Rig' });
+  });
+
+  it('does not re-announce the rig crate already there when the bot connected', () => {
+    // Priming is what stops a reconnect reporting the standing crate as new.
+    const d = detector();
+    d.update([marker(30, MarkerType.Crate, 3300, 3300)], t0);
 
     expect(d.update([marker(30, MarkerType.Crate, 3300, 3300)], at(5))).toEqual([]);
   });

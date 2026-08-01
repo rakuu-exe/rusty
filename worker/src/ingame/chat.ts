@@ -64,14 +64,21 @@ async function describeOilRig(serverId: string, label: string): Promise<string> 
   return `${label}: crate called ${ago} ago${where}`;
 }
 
-/** Which event marks a "spawn" for each `!when-*` subject. */
+/**
+ * Which event marks a "spawn" for each `!when-*` subject.
+ *
+ * The oil rigs key off `spawned` (the crate respawning on its own) rather than
+ * `called` (a player bringing heavy scientists in). "!when-loil" asks when the
+ * crate is next available, which is the respawn — a called crate depends on
+ * someone choosing to call it and has no cycle to predict.
+ */
 const RESPAWN_SUBJECTS = {
   cargo: { label: 'Cargo', type: 'cargo_ship', phase: 'entered_map' },
   crate: { label: 'Chinook crate', type: 'ch47', phase: 'entered_map' },
   heli: { label: 'Heli', type: 'patrol_helicopter', phase: 'entered_map' },
-  loil: { label: 'Large Oil Rig', type: 'oil_rig_crate', phase: 'called', monument: 'Large Oil Rig' },
-  smoil: { label: 'Small Oil Rig', type: 'oil_rig_crate', phase: 'called', monument: 'Small Oil Rig' },
-  oil: { label: 'Oil Rig', type: 'oil_rig_crate', phase: 'called' },
+  loil: { label: 'Large Oil Rig', type: 'oil_rig_crate', phase: 'spawned', monument: 'Large Oil Rig' },
+  smoil: { label: 'Small Oil Rig', type: 'oil_rig_crate', phase: 'spawned', monument: 'Small Oil Rig' },
+  oil: { label: 'Oil Rig', type: 'oil_rig_crate', phase: 'spawned' },
   vendor: { label: 'Vendor', type: 'travelling_vendor', phase: 'entered_map' },
 } as const satisfies Record<string, { label: string; type: string; phase: string; monument?: string }>;
 

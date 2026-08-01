@@ -70,7 +70,11 @@ function subject(event: DetectedEvent): string {
 
     case 'oil_rig_crate': {
       const rig = monument ?? 'OIL RIG';
-      return event.phase === 'called' ? `${rig} CRATE CALLED` : `${rig} CRATE UNLOCKED`;
+      if (event.phase === 'called') return `${rig} CRATE CALLED`;
+      // A respawn is the crate becoming available again on its own, distinct
+      // from a player calling heavy scientists in to unlock it.
+      if (event.phase === 'spawned') return `${rig} CRATE RESPAWNED`;
+      return `${rig} CRATE UNLOCKED`;
     }
 
     case 'locked_crate':
@@ -137,6 +141,7 @@ export function formatEventLineInGame(event: DetectedEvent, options: FormatOptio
         const opens = event.opensAt ? `, opens ${formatClock(event.opensAt, options.timezone)}` : '';
         return `${rig} crate called ${at}${opens}`;
       }
+      if (event.phase === 'spawned') return `${rig} crate respawned ${at}`;
       return `${rig} crate OPEN ${at}`;
     }
 

@@ -226,9 +226,31 @@ export class EventDetector {
       }
 
       case MarkerType.Crate: {
-        // Oil rigs always have a crate marker sitting on them; announcing that
-        // would fire on every reconnect. Only crates away from a rig are news.
-        if (this.monuments.oilRigAt(marker.x, marker.y)) return [];
+        /**
+         * A crate appearing at an oil rig is that rig's locked crate
+         * respawning, and is exactly what `!when-loil` / `!when-smoil` are
+         * about.
+         *
+         * An earlier version discarded these outright, worried that the crate
+         * permanently sitting on a rig would be announced on every reconnect.
+         * That guard was unnecessary — priming already absorbs whatever is on
+         * the map when the bot connects — so all it achieved was throwing away
+         * every genuine respawn.
+         */
+        const rig = this.monuments.oilRigAt(marker.x, marker.y);
+        if (rig) {
+          return [
+            {
+              ...base,
+              type: 'oil_rig_crate',
+              phase: 'spawned',
+              monument: rig.monument.displayName,
+              x: rig.monument.x,
+              y: rig.monument.y,
+              grid: this.grid(rig.monument.x, rig.monument.y),
+            },
+          ];
+        }
 
         // A crate riding the Cargo Ship, rather than one dropped on land.
         // Checked before the monument lookup because the ship sails past
