@@ -71,6 +71,22 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
   constructor(private readonly options: RustPlusClientOptions) {
     super();
     this.queue = new RateLimitedQueue(new TokenBucketRateLimiter());
+
+    /**
+     * Node throws when an EventEmitter emits 'error' with no listener, taking
+     * the whole process down. Rust servers reset connections routinely, so
+     * this fired every few minutes in production and crash-looped the bot:
+     *
+     *   Error: read ECONNRESET
+     *   Emitted 'error' event on RustPlusClient instance at: ...
+     *
+     * A default listener makes emitting safe regardless of what callers
+     * subscribe to. Reconnection is driven by 'disconnected', which always
+     * follows, so an error alone needs no other handling.
+     */
+    this.on('error', (error) => {
+      logger.debug({ server: this.label, err: error.message }, 'Rust+ client error');
+    });
   }
 
   get isConnected(): boolean {

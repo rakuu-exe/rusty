@@ -37,8 +37,20 @@ async function main(): Promise<void> {
   logger.info({ timezone: settings.TIMEZONE, pollMs: settings.POLL_INTERVAL_MS }, 'starting worker');
 
   const app = new App(settings);
-  await app.start();
 
+  /**
+   * Register process handlers *before* starting.
+   *
+   * app.start() waits on the first Rust+ connection, so if that never settles
+   * these were never registered — which is exactly what happened in
+   * production: a socket error during startup threw with no uncaughtException
+   * handler in place, and the container crash-looped every few minutes.
+   */
+  installProcessHandlers(app);
+  await app.start();
+}
+
+function installProcessHandlers(app: App): void {
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
