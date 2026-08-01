@@ -9,5 +9,7 @@ worker/.env
 rustplus.config.json
 *.credentials.json
 
-# Captured live marker payloads may contain player positions/steam ids
+# Captured live marker payloads. The recorder strips players and vending
+# machines, but raw captures are still noisy and machine-specific.
 worker/test/fixtures/*.live.json
+worker/test/fixtures/*.live.jsonl
