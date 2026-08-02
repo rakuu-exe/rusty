@@ -3,6 +3,8 @@ import { VendingStore } from '../src/vending/store.js';
 import { toVendingMachines } from '../src/vending/decode.js';
 import { loadItems, findItem, itemName } from '../src/vending/items.js';
 import { describeVendingEvent, isAnnounceableVendingEvent, joinCapped } from '../src/vending/format.js';
+import { ALIAS_DISPLAY } from '../src/vending/aliases.js';
+import type { VendingEvent } from '../src/vending/types.js';
 import { resolveVendingCommand } from '../src/vending/commands.js';
 import { MarkerType, type RustMapMarker } from '../src/rustplus/types.js';
 import type { SellOrder, VendingMachine } from '../src/vending/types.js';
@@ -594,5 +596,82 @@ describe('nicknames in replies', () => {
 
   it('leaves items without a nickname alone', () => {
     expect(resolveVendingCommand('vend', 'scrap', deps(storeWith(SCRAP, AK)))).toContain('Scrap');
+  });
+});
+
+/**
+ * Announcements are rendered twice: once for Discord, once for team chat.
+ *
+ * Discord has no length limit and reads better with full names and the shop's
+ * own name. Team chat is capped at 128 characters, so the same change has to
+ * arrive as something a teammate can read at a glance mid-fight.
+ */
+describe('announcements in team chat', () => {
+  const AK = 1545779598;
+  const SULFUR = -1581843485;
+
+  function priceChange(itemId: number, currencyId: number): VendingEvent {
+    const store = new VendingStore();
+    const shopName = 'Bobs Discount Emporium And Sons Ltd';
+    store.update([machine({ name: shopName, orders: [order({ itemId, currencyId, costPerItem: 100 })] })]);
+    return store.update([
+      machine({ name: shopName, orders: [order({ itemId, currencyId, costPerItem: 120 })] }),
+    ])[0]!;
+  }
+
+  it('uses the names players use', () => {
+    const event = priceChange(AK, SCRAP);
+
+    expect(describeVendingEvent(event, { short: true })).toContain('AK');
+    expect(describeVendingEvent(event, { short: true })).not.toContain('Assault Rifle');
+  });
+
+  it('shortens the currency as well as the item', () => {
+    const event = priceChange(AK, SULFUR);
+    const short = describeVendingEvent(event, { short: true });
+
+    expect(short).toContain('Sulf');
+    expect(short).not.toContain('Sulfur ');
+  });
+
+  it('drops the shop name, keeping the grid', () => {
+    const event = priceChange(AK, SCRAP);
+    const short = describeVendingEvent(event, { short: true });
+
+    expect(short).toContain('N13');
+    expect(short).not.toContain('Emporium');
+  });
+
+  it('fits a chat line where the Discord version would not', () => {
+    const event = priceChange(AK, SCRAP);
+
+    expect(describeVendingEvent(event, { short: true }).length).toBeLessThanOrEqual(128);
+  });
+
+  it('leaves the Discord rendering long and explicit', () => {
+    const long = describeVendingEvent(priceChange(AK, SCRAP));
+
+    expect(long).toContain('Assault Rifle');
+    expect(long).toContain('Emporium');
+  });
+});
+
+describe('nickname table', () => {
+  it('prefers the recognisable form over the shortest one', () => {
+    // "basic" is the shortest alias for a Basic Blueprint Fragment and tells
+    // you nothing; "T2 BP" is shorter than the full name and unambiguous.
+    expect(ALIAS_DISPLAY['basicblueprintfragment']).toBe('T2 BP');
+    expect(ALIAS_DISPLAY['advancedblueprintfragment']).toBe('T3 BP');
+    expect(ALIAS_DISPLAY['sulfur']).toBe('Sulf');
+    expect(ALIAS_DISPLAY['rifle.ak']).toBe('AK');
+    expect(ALIAS_DISPLAY['pistol.semiauto']).toBe('P2');
+    expect(ALIAS_DISPLAY['workbench2']).toBe('T2');
+  });
+
+  it('can type back everything it prints', () => {
+    // A nickname the bot shows but cannot parse would be a dead end.
+    for (const display of Object.values(ALIAS_DISPLAY)) {
+      expect(findItem(display), `typing "${display}" back`).not.toBeNull();
+    }
   });
 });

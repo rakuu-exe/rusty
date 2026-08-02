@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { logger } from '../logger.js';
-import { ALIAS_DISPLAY, ITEM_ALIASES, resolveAlias } from './aliases.js';
+import { ALIAS_DISPLAY, CURATED_NICKNAMES, ITEM_ALIASES, resolveAlias } from './aliases.js';
 
 export interface ItemInfo {
   name: string;
@@ -107,8 +107,14 @@ export function chatItemName(id: number): string {
   const info = items[String(id)];
   if (!info) return `item ${id}`;
 
-  const alias = ALIAS_DISPLAY[info.short];
-  return alias && info.name.length - alias.length >= ALIAS_MIN_SAVING ? alias : info.name;
+  // A curated nickname is a deliberate choice and always wins: "Sulf" only
+  // saves two characters over "Sulfur", but it is what people say.
+  const curated = CURATED_NICKNAMES[info.short];
+  if (curated) return curated;
+
+  // Derived nicknames are guesses, so they have to earn their place.
+  const derived = ALIAS_DISPLAY[info.short];
+  return derived && info.name.length - derived.length >= ALIAS_MIN_SAVING ? derived : info.name;
 }
 
 /** True once a real dataset is loaded. */

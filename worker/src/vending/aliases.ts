@@ -143,6 +143,9 @@ export const ITEM_ALIASES: Readonly<Record<string, string>> = {
   lgf: 'lowgradefuel',
   lowgrade: 'lowgradefuel',
   crude: 'crude.oil',
+  sulf: 'sulfur',
+  sulfore: 'sulfur.ore',
+  stone: 'stones',
 
   // ---- workbenches -------------------------------------------------------
   t1: 'workbench1',
@@ -183,11 +186,6 @@ export const ITEM_ALIASES: Readonly<Record<string, string>> = {
   t3bp: 'advancedblueprintfragment',
 };
 
-/** Short name for a community alias, or null when the phrase is not one. */
-export function resolveAlias(normalisedQuery: string): string | null {
-  return ITEM_ALIASES[normalisedQuery] ?? null;
-}
-
 /**
  * How to write an alias out: "ak" as AK, "bolty" as Bolty.
  *
@@ -200,11 +198,97 @@ function displayForm(alias: string): string {
 }
 
 /**
- * Best community name per item, keyed by short name.
+ * How to write an item's name when space is tight.
  *
- * The table above maps many aliases to one item; this picks one to write back
- * out. Shortest wins, ties broken alphabetically so the choice is stable
- * rather than dependent on key order.
+ * Curated rather than derived, because "shortest alias" and "what a player
+ * would recognise" are not the same thing: the shortest alias for a Basic
+ * Blueprint Fragment is "basic", which tells you nothing, where "T2 BP" is
+ * both shorter than the full name and immediately clear.
+ *
+ * Anything not listed falls back to the shortest alias, and anything with no
+ * alias at all keeps its full name.
+ */
+export const CURATED_NICKNAMES: Readonly<Record<string, string>> = {
+  // resources
+  sulfur: 'Sulf',
+  'sulfur.ore': 'Sulf Ore',
+  gunpowder: 'GP',
+  'metal.fragments': 'Frags',
+  'metal.refined': 'HQM',
+  lowgradefuel: 'LGF',
+  'crude.oil': 'Crude',
+  stones: 'Stone',
+
+  // blueprint fragments and benches — the tier is the whole point
+  basicblueprintfragment: 'T2 BP',
+  advancedblueprintfragment: 'T3 BP',
+  workbench1: 'T1',
+  workbench2: 'T2',
+  workbench3: 'T3',
+
+  // guns
+  'rifle.ak': 'AK',
+  'rifle.lr300': 'LR300',
+  'rifle.semiauto': 'SAR',
+  'rifle.bolt': 'Bolty',
+  'rifle.l96': 'L96',
+  'pistol.semiauto': 'P2',
+  'pistol.python': 'Python',
+  'pistol.revolver': 'Revo',
+  'pistol.m92': 'M92',
+  'smg.thompson': 'Tommy',
+  'smg.mp5': 'MP5',
+  'smg.2': 'Custom',
+  'lmg.m249': 'M249',
+  'shotgun.double': 'DB',
+  'shotgun.pump': 'Pump',
+  'shotgun.spas12': 'SPAS',
+
+  // explosives and ammo
+  'explosive.timed': 'C4',
+  'explosive.satchel': 'Satchel',
+  'ammo.rocket.basic': 'Rocket',
+  'ammo.rocket.hv': 'HV Rocket',
+  'ammo.rocket.fire': 'Incen Rocket',
+  'ammo.rifle': '5.56',
+  'ammo.rifle.hv': 'HV 5.56',
+  'ammo.rifle.explosive': 'Explo 5.56',
+  'ammo.rifle.incendiary': 'Incen 5.56',
+  'ammo.pistol': 'Pistol Ammo',
+  'ammo.shotgun': 'Buck',
+  'ammo.shotgun.slug': 'Slug',
+  'grenade.f1': 'F1',
+  'grenade.beancan': 'Beancan',
+
+  // components
+  techparts: 'Tech Trash',
+  metalspring: 'Spring',
+  sewingkit: 'Sewing Kit',
+  'cctv.camera': 'CCTV',
+  'targeting.computer': 'Targeting',
+  riflebody: 'Rifle Body',
+  semibody: 'Semi Body',
+  smgbody: 'SMG Body',
+
+  // gear and deployables
+  'cupboard.tool': 'TC',
+  autoturret: 'Turret',
+  samsite: 'SAM',
+  'metal.facemask': 'Facemask',
+  'coffeecan.helmet': 'Coffee Can',
+  hazmatsuit: 'Hazzy',
+  'roadsign.jacket': 'Roadsign',
+  'door.hinged.toptier': 'Armored Door',
+  'door.hinged.metal': 'Sheet Door',
+  'wall.frame.garagedoor': 'Garage',
+  'box.wooden.large': 'Large Box',
+};
+
+/**
+ * Display name per item, keyed by short name.
+ *
+ * Curated entries win; the rest fall back to the shortest alias, ties broken
+ * alphabetically so the choice is stable rather than dependent on key order.
  */
 export const ALIAS_DISPLAY: Readonly<Record<string, string>> = (() => {
   const best: Record<string, string> = {};
@@ -216,5 +300,35 @@ export const ALIAS_DISPLAY: Readonly<Record<string, string>> = (() => {
     }
   }
 
-  return Object.fromEntries(Object.entries(best).map(([short, alias]) => [short, displayForm(alias)]));
+  const derived = Object.fromEntries(
+    Object.entries(best).map(([short, alias]) => [short, displayForm(alias)]),
+  );
+
+  return { ...derived, ...CURATED_NICKNAMES };
 })();
+
+/**
+ * Everything that can be typed: the aliases above, plus the normalised form of
+ * every name the bot prints.
+ *
+ * Derived rather than hand-listed so the two can never disagree. Without it
+ * the bot displayed "HV Rocket" and then found nothing when somebody typed it
+ * back — a dead end created by its own output.
+ *
+ * Explicit aliases win, so this only ever adds ways in.
+ */
+const ALIAS_LOOKUP: Readonly<Record<string, string>> = (() => {
+  const table: Record<string, string> = { ...ITEM_ALIASES };
+
+  for (const [short, display] of Object.entries(ALIAS_DISPLAY)) {
+    const key = display.toLowerCase().replace(/[^a-z0-9]/g, '');
+    table[key] ??= short;
+  }
+
+  return table;
+})();
+
+/** Short name for a community alias, or null when the phrase is not one. */
+export function resolveAlias(normalisedQuery: string): string | null {
+  return ALIAS_LOOKUP[normalisedQuery] ?? null;
+}

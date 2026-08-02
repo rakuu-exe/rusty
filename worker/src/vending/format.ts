@@ -6,8 +6,24 @@
  * useful, a silently trimmed list is misleading.
  */
 
-import { itemName } from './items.js';
+import { chatItemName, itemName } from './items.js';
 import type { PricePoint, SellOrder, VendingEvent, VendingMachine } from './types.js';
+
+/**
+ * How a line names things.
+ *
+ * Discord embeds have room for "Assault Rifle" and read better with it. Rust
+ * team chat is capped at 128 characters, so the same line there uses what
+ * players call it — "AK" — and drops the shop's own name, which is decoration
+ * next to the grid reference.
+ */
+export interface NamingOptions {
+  short?: boolean;
+}
+
+function namerFor(options: NamingOptions): (id: number) => string {
+  return options.short ? chatItemName : itemName;
+}
 
 /**
  * Rust cuts a team chat message off at 128 characters.
@@ -20,14 +36,15 @@ import type { PricePoint, SellOrder, VendingEvent, VendingMachine } from './type
 export const MAX_CHAT_LENGTH = 128;
 
 /** "5x Scrap" or just "Scrap" for a single unit. */
-export function describeAmount(itemId: number, quantity: number): string {
-  return quantity === 1 ? itemName(itemId) : `${quantity}x ${itemName(itemId)}`;
+export function describeAmount(itemId: number, quantity: number, options: NamingOptions = {}): string {
+  const name = namerFor(options);
+  return quantity === 1 ? name(itemId) : `${quantity}x ${name(itemId)}`;
 }
 
 /** "10 Scrap for 5x Cloth" — the deal as a shopper reads it. */
-export function describeOrder(order: SellOrder): string {
-  const cost = describeAmount(order.currencyId, order.costPerItem);
-  const item = describeAmount(order.itemId, order.quantity);
+export function describeOrder(order: SellOrder, options: NamingOptions = {}): string {
+  const cost = describeAmount(order.currencyId, order.costPerItem, options);
+  const item = describeAmount(order.itemId, order.quantity, options);
   return `${cost} → ${item}`;
 }
 
@@ -160,12 +177,21 @@ export function describePricePoint(
   point: PricePoint,
   formatClock: (d: Date) => string,
 ): string {
-  return `${formatClock(point.at)} ${point.grid} ${point.costPerItem} ${itemName(point.currencyId)}`;
+  // Chat only, so the community name always applies here.
+  return `${formatClock(point.at)} ${point.grid} ${point.costPerItem} ${chatItemName(point.currencyId)}`;
 }
 
-/** A change, for announcements. Kept terse enough for in-game chat. */
-export function describeVendingEvent(event: VendingEvent): string {
-  const where = `${event.machine.grid} "${event.machine.name}"`;
+/**
+ * A change, for announcements.
+ *
+ * `short` renders the team chat version: community item names, and the grid
+ * alone rather than the grid plus the shop's own name. Shop names are often
+ * long and occasionally deliberately silly, which is fine in a Discord embed
+ * and ruinous on a 128-character line where the price is what matters.
+ */
+export function describeVendingEvent(event: VendingEvent, options: NamingOptions = {}): string {
+  const name = namerFor(options);
+  const where = options.short ? event.machine.grid : `${event.machine.grid} "${event.machine.name}"`;
   const order = event.order;
 
   switch (event.kind) {
@@ -175,31 +201,31 @@ export function describeVendingEvent(event: VendingEvent): string {
       return `Shop removed: ${where}`;
 
     case 'item_added':
-      return order ? `New listing ${where}: ${describeOrder(order)}` : `New listing ${where}`;
+      return order ? `New listing ${where}: ${describeOrder(order, options)}` : `New listing ${where}`;
     case 'item_removed':
-      return order ? `Delisted ${where}: ${itemName(order.itemId)}` : `Delisted ${where}`;
+      return order ? `Delisted ${where}: ${name(order.itemId)}` : `Delisted ${where}`;
 
     case 'out_of_stock':
-      return order ? `OUT OF STOCK ${where}: ${itemName(order.itemId)}` : `Out of stock ${where}`;
+      return order ? `OUT OF STOCK ${where}: ${name(order.itemId)}` : `Out of stock ${where}`;
 
     case 'stock_changed':
       return order && event.previous
-        ? `Stock ${where}: ${itemName(order.itemId)} ${event.previous.amountInStock} → ${order.amountInStock}`
+        ? `Stock ${where}: ${name(order.itemId)} ${event.previous.amountInStock} → ${order.amountInStock}`
         : `Stock changed ${where}`;
 
     case 'price_changed':
       return order && event.previous
-        ? `Price ${where}: ${itemName(order.itemId)} ${event.previous.costPerItem} → ${order.costPerItem} ${itemName(order.currencyId)}`
+        ? `Price ${where}: ${name(order.itemId)} ${event.previous.costPerItem} → ${order.costPerItem} ${name(order.currencyId)}`
         : `Price changed ${where}`;
 
     case 'tracked_appeared':
       return order
-        ? `TRACKED "${event.trackerLabel}" ${where}: ${describeOrder(order)} x${order.amountInStock}`
+        ? `TRACKED "${event.trackerLabel}" ${where}: ${describeOrder(order, options)} x${order.amountInStock}`
         : `TRACKED "${event.trackerLabel}" ${where}`;
 
     case 'tracked_price_changed':
       return order && event.previous
-        ? `TRACKED "${event.trackerLabel}" ${where}: ${itemName(order.itemId)} ${event.previous.costPerItem} → ${order.costPerItem}`
+        ? `TRACKED "${event.trackerLabel}" ${where}: ${name(order.itemId)} ${event.previous.costPerItem} → ${order.costPerItem}`
         : `TRACKED "${event.trackerLabel}" ${where}`;
   }
 }

@@ -248,14 +248,19 @@ export class ServerRuntime {
     const events = this.vending.update(machines);
 
     for (const event of events.filter((e) => isAnnounceableVendingEvent(e.kind))) {
+      // Two renderings of the same change: Discord has room for full item
+      // names and the shop's own name, a 128-character chat line does not.
       const line = describeVendingEvent(event);
+      const chatLine = describeVendingEvent(event, { short: true });
+
       try {
         const channel = this.options.getEventChannelId();
         if (channel) await this.options.bot.postText(channel, `🛒 ${line}`);
 
         if (this.client.isConnected) {
-          this.selfMessages.remember(line);
-          await this.client.sendTeamMessage(line);
+          // Remember what was actually sent, or the echo will not be matched.
+          this.selfMessages.remember(chatLine);
+          await this.client.sendTeamMessage(chatLine);
         }
       } catch (error) {
         logger.warn(
