@@ -54,6 +54,19 @@ const ABORTED_HANDSHAKE = 'WebSocket was closed before the connection was establ
 /** Long enough for a SYN/ACK across Europe, short enough not to stack up. */
 const TCP_PROBE_TIMEOUT_MS = 10_000;
 
+/**
+ * Minimum gap between reachability probes.
+ *
+ * The probe opens a second TCP connection every time a connect attempt fails.
+ * Against a host behind DDoS mitigation that is the wrong shape of traffic --
+ * repeated connections from one source is what gets an address blackholed, and
+ * the bot would have been reinforcing the very block it was trying to explain.
+ *
+ * The answer changes on the timescale of a server restart, so once every
+ * fifteen minutes tells us everything a per-attempt probe would.
+ */
+const REACHABILITY_PROBE_INTERVAL_MS = 15 * 60_000;
+
 function timeoutFor(kind: string): number {
   return kind === 'getMap' ? MAP_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 }
@@ -120,6 +133,8 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
   private backoffMs = INITIAL_BACKOFF_MS;
   private shuttingDown = false;
   private connected = false;
+  /** Last reachability probe, so failures do not each open another socket. */
+  private lastProbeAt = 0;
 
   constructor(private options: RustPlusClientOptions) {
     super();
@@ -231,16 +246,24 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
     const connectTimer = setTimeout(() => {
       if (this.connected) return;
 
-      // Ask TCP directly why, before discarding the attempt -- the answer is
-      // what separates "port unreachable" from "token or throttle".
-      void probeTcp(serverIp, appPort).then((reachability) => {
-        logger.warn(
-          { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS, address: `${serverIp}:${appPort}`, reachability },
-          reachability === 'open'
-            ? 'companion port answers but the Rust+ handshake never completed -- stale token or per-player throttle'
-            : 'companion port is not reachable -- the server has most likely moved; re-pair in game',
-        );
-      });
+      const address = `${serverIp}:${appPort}`;
+
+      // Ask TCP directly why -- the answer separates "port unreachable" from
+      // "token or throttle" -- but sparingly, so diagnosis does not become
+      // more connection pressure on a host that is already refusing us.
+      if (Date.now() - this.lastProbeAt >= REACHABILITY_PROBE_INTERVAL_MS) {
+        this.lastProbeAt = Date.now();
+        void probeTcp(serverIp, appPort).then((reachability) => {
+          logger.warn(
+            { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS, address, reachability },
+            reachability === 'open'
+              ? 'Rust+ port answers but the handshake never completed -- stale token or per-player throttle'
+              : 'Rust+ port is not reachable -- the server may have moved, or this address is being filtered',
+          );
+        });
+      } else {
+        logger.warn({ server: this.label, timeoutMs: CONNECT_TIMEOUT_MS, address }, 'Rust+ connection never completed');
+      }
 
       abortingConnect = true;
       try {
