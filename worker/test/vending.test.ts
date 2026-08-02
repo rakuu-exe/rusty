@@ -731,3 +731,70 @@ describe('!vend with mixed currencies', () => {
     expect(reply).toContain('S6 10 x5');
   });
 });
+
+/**
+ * Paging has to explain itself.
+ *
+ * "(1/4)" says more listings exist without saying how to see them, which is a
+ * dead end for anyone who has not read !vendhelp — and the first person to use
+ * it asked exactly that.
+ */
+describe('!vend paging is discoverable', () => {
+  const AK = 1545779598;
+
+  function busy(): VendingStore {
+    const store = new VendingStore();
+    store.update(
+      Array.from({ length: 30 }, (_, i) =>
+        machine({
+          id: i + 1,
+          grid: `${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[i % 26]}${i + 1}`,
+          orders: [order({ itemId: AK, costPerItem: 100 + i })],
+        }),
+      ),
+    );
+    return store;
+  }
+
+  it('spells out the command for the next page', () => {
+    expect(resolveVendingCommand('vend', 'ak', deps(busy()))).toContain('!vend AK 2');
+  });
+
+  it('the command it prints actually works', () => {
+    const store = busy();
+    const first = resolveVendingCommand('vend', 'ak', deps(store))!;
+
+    // Pull the suggested command straight out of the reply and run it.
+    const suggested = first.match(/!vend (\S+) (\d+)/)!;
+    const second = resolveVendingCommand('vend', `${suggested[1]} ${suggested[2]}`, deps(store))!;
+
+    expect(second).toContain('(2/');
+    expect(second).not.toBe(first);
+  });
+
+  it('stops suggesting once there is nowhere further to go', () => {
+    const store = busy();
+    const pages = Number(resolveVendingCommand('vend', 'ak', deps(store))!.match(/\/(\d+)/)![1]);
+    const last = resolveVendingCommand('vend', `ak ${pages}`, deps(store))!;
+
+    expect(last).toContain(`(${pages}/${pages})`);
+    expect(last).not.toContain('!vend AK');
+  });
+
+  it('keeps page boundaries stable regardless of which page is asked for', () => {
+    // The marker budget is constant, so a listing must not move pages just
+    // because page one carries a longer marker.
+    const store = busy();
+    const firstEntryOfPageTwo = resolveVendingCommand('vend', 'ak 2', deps(store))!
+      .split(' | ')[1];
+
+    const again = resolveVendingCommand('vend', 'ak 2', deps(store))!.split(' | ')[1];
+    expect(again).toBe(firstEntryOfPageTwo);
+  });
+
+  it('still fits the chat line with the hint attached', () => {
+    for (const q of ['ak', 'ak 2', 'ak 3']) {
+      expect(resolveVendingCommand('vend', q, deps(busy()))!.length).toBeLessThanOrEqual(128);
+    }
+  });
+});

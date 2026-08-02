@@ -100,17 +100,35 @@ function vend(query: string, deps: VendingCommandDeps): string {
     describeListingCompact(l.machine, l.order, { withCurrency: currency === null }),
   );
 
-  // Reserve the header and the page marker so the whole line fits, not just
-  // the listings inside it.
   const header = `${name}: ${summary}${soldOut}${LISTING_SEPARATOR}`;
-  const pages = paginate(
-    entries,
-    MAX_CHAT_LENGTH - header.length - PAGE_MARKER_BUDGET,
-    LISTING_SEPARATOR,
-  );
+
+  /**
+   * Reserve a constant amount for the page marker, sized to the longest one
+   * this reply could produce.
+   *
+   * Constant rather than exact so page boundaries do not shift depending on
+   * which page was asked for — a listing must not move to a different page
+   * just because page one carries a longer marker than page three.
+   */
+  const markerBudget = ` (9/9 !vend ${name} 9)`.length;
+  const pages = paginate(entries, MAX_CHAT_LENGTH - header.length - markerBudget, LISTING_SEPARATOR);
 
   const index = Math.min(page, pages.length) - 1;
-  const marker = pages.length > 1 ? ` (${index + 1}/${pages.length})` : '';
+
+  /**
+   * Spell out the command for the next page rather than only numbering them.
+   * "(1/4)" says more exist without saying how to reach them, which is a dead
+   * end for anyone who has not read !vendhelp.
+   *
+   * The nickname is used because it is guaranteed typeable — every name the
+   * bot prints is registered as an input alias.
+   */
+  const marker =
+    pages.length <= 1
+      ? ''
+      : index + 1 < pages.length
+        ? ` (${index + 1}/${pages.length} !vend ${name} ${index + 2})`
+        : ` (${index + 1}/${pages.length})`;
 
   return `${header}${pages[index]!.join(LISTING_SEPARATOR)}${marker}`;
 }
@@ -124,8 +142,6 @@ function vend(query: string, deps: VendingCommandDeps): string {
  */
 const LISTING_SEPARATOR = ' | ';
 
-/** Room kept for a trailing "(2/4)" so it never pushes the line over. */
-const PAGE_MARKER_BUDGET = 8;
 
 /**
  * !vendhelp [command] — the vending commands, and what they do.
