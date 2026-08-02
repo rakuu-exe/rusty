@@ -89,6 +89,16 @@ export class ServerRuntime {
     return this.client.isConnected;
   }
 
+  /** Where the client is dialing, as `ip:port`. Changes when the server moves. */
+  get address(): string {
+    return this.client.address;
+  }
+
+  /** Adopt a re-pairing's credentials in place; applied on the next reconnect. */
+  updateCredentials(playerId: string, playerToken: string): boolean {
+    return this.client.updateCredentials({ playerId, playerToken });
+  }
+
   async start(): Promise<void> {
     const { row } = this.options;
 

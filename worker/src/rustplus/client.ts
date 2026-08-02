@@ -121,7 +121,7 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
   private shuttingDown = false;
   private connected = false;
 
-  constructor(private readonly options: RustPlusClientOptions) {
+  constructor(private options: RustPlusClientOptions) {
     super();
     this.queue = new RateLimitedQueue(new TokenBucketRateLimiter());
 
@@ -148,6 +148,30 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
 
   get label(): string {
     return this.options.label ?? `${this.options.serverIp}:${this.options.appPort}`;
+  }
+
+  /** Where this client is currently dialing, as `ip:port`. */
+  get address(): string {
+    return `${this.options.serverIp}:${this.options.appPort}`;
+  }
+
+  /**
+   * Adopt credentials from a fresh pairing without rebuilding the client.
+   *
+   * The socket reads these at connect time, so a change lands on the next
+   * reconnect. Before this existed the options were fixed at construction,
+   * which quietly made re-pairing a no-op for an already-running client.
+   *
+   * Returns true when something actually changed.
+   */
+  updateCredentials(next: Pick<RustPlusClientOptions, 'playerId' | 'playerToken'>): boolean {
+    if (this.options.playerId === next.playerId && this.options.playerToken === next.playerToken) {
+      return false;
+    }
+
+    this.options = { ...this.options, ...next };
+    logger.info({ server: this.label }, 'Rust+ credentials updated; next reconnect will use them');
+    return true;
   }
 
   /**
@@ -211,10 +235,10 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
       // what separates "port unreachable" from "token or throttle".
       void probeTcp(serverIp, appPort).then((reachability) => {
         logger.warn(
-          { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS, port: appPort, reachability },
+          { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS, address: `${serverIp}:${appPort}`, reachability },
           reachability === 'open'
             ? 'companion port answers but the Rust+ handshake never completed -- stale token or per-player throttle'
-            : 'companion port is not reachable -- nothing to do with the token',
+            : 'companion port is not reachable -- the server has most likely moved; re-pair in game',
         );
       });
 

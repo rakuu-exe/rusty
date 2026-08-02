@@ -193,20 +193,36 @@ export class App implements BotContext {
 
       await setPairingSteamId(this.guildId, notification.playerId);
 
+      const existing = this.runtimes.get(row.id);
+      const address = `${notification.ip}:${notification.port}`;
+
+      /**
+       * A moved server always forces a rebuild.
+       *
+       * The client fixes its address at construction, so a running runtime
+       * keeps dialing wherever it started. When the server moved and the token
+       * happened to be unchanged, the guard below discarded the pairing and
+       * the bot spent the rest of its life sending SYNs to a host that no
+       * longer existed -- ETIMEDOUT on every retry, backoff climbing to five
+       * minutes, and nothing in the logs above debug to say why.
+       */
+      const moved = existing != null && existing.address !== address;
+      if (moved) {
+        logger.warn({ server: row.name, from: existing.address, to: address }, 'server moved; reconnecting');
+      }
+
       /**
        * FCM redelivers stored pushes whenever the listener reconnects, so on
        * every boot the original pairing arrives again. Tearing the runtime
-       * down and rebuilding it for an unchanged token caused a needless
+       * down and rebuilding it for an unchanged pairing caused a needless
        * disconnect/reconnect cycle and a second (expensive) getMap.
-       *
-       * Only rebuild when the token actually changed, which is what genuine
-       * re-pairing produces.
        */
-      const existing = this.runtimes.get(row.id);
-      if (existing && this.activeTokens.get(row.id) === notification.playerToken) {
+      if (existing && !moved && this.activeTokens.get(row.id) === notification.playerToken) {
         logger.debug({ server: row.name }, 'ignoring redelivered pairing for an unchanged token');
         return;
       }
+
+      this.activeTokens.set(row.id, notification.playerToken);
 
       /**
        * Rebuilding the runtime resets the reconnect backoff, so a burst of
@@ -215,24 +231,28 @@ export class App implements BotContext {
        * repeated pairings knocked it back to 3s each time, adding pressure to
        * a connection that was already being refused.
        *
-       * The newest token is already saved, so a skipped rebuild costs nothing
-       * -- the next reconnect picks it up.
+       * Handing the credentials to the live client instead gets the same
+       * result on its next scheduled reconnect. That is what this used to
+       * claim to do while doing nothing at all -- the options were fixed at
+       * construction, so a deferred re-pair was silently dropped.
+       *
+       * A move is exempt: the backoff being protected belongs to a dead
+       * address and is worth nothing.
        */
       const lastStart = this.lastRuntimeStart.get(row.id) ?? 0;
       const sinceLastStart = Date.now() - lastStart;
-      if (existing && sinceLastStart < RUNTIME_RESTART_COOLDOWN_MS) {
+      if (existing && !moved && sinceLastStart < RUNTIME_RESTART_COOLDOWN_MS) {
+        existing.updateCredentials(notification.playerId, notification.playerToken);
         logger.info(
           { server: row.name, sinceLastStartMs: sinceLastStart },
-          'pairing accepted; deferring reconnect so backoff is not reset',
+          'pairing accepted; applying on the next reconnect so backoff is not reset',
         );
-        this.activeTokens.set(row.id, notification.playerToken);
         return;
       }
 
-      this.activeTokens.set(row.id, notification.playerToken);
       await this.startServer(row.id, row);
 
-      logger.info({ server: row.name }, 'paired and connected');
+      logger.info({ server: row.name, address }, 'paired and connected');
     } catch (error) {
       logger.error(
         { err: error instanceof Error ? error.message : String(error) },

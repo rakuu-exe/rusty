@@ -24,7 +24,12 @@ vi.mock('@liamcottle/rustplus.js', () => {
   const sockets: EventEmitter[] = ((globalThis as Record<string, unknown>).__sockets ??= []) as EventEmitter[];
 
   class FakeRustPlus extends EventEmitter {
-    constructor() {
+    constructor(
+      readonly serverIp: string,
+      readonly appPort: number,
+      readonly playerId: string,
+      readonly playerToken: string,
+    ) {
       super();
       sockets.push(this);
     }
@@ -156,6 +161,36 @@ describe('stalled handshake teardown', () => {
     sockets()[0]!.emit('error', new Error('read ECONNRESET'));
 
     expect(seen.map((e) => e.message)).toEqual(['read ECONNRESET']);
+  });
+
+  /**
+   * Re-pairing used to be a no-op for a running client: the options were fixed
+   * at construction, so the deferred path saved the new token to the database,
+   * logged that the next reconnect would pick it up, and then reconnected with
+   * the old one forever.
+   */
+  it('dials the next reconnect with updated credentials', async () => {
+    const c = client();
+    void c.connect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(c.updateCredentials({ playerId: '765611980000000001', playerToken: 'fresh' })).toBe(true);
+
+    // Past the 30s abort and the backoff that follows it.
+    await vi.advanceTimersByTimeAsync(35_000);
+
+    const latest = sockets().at(-1) as unknown as { playerId: string; playerToken: string };
+    expect(latest.playerToken).toBe('fresh');
+    expect(latest.playerId).toBe('765611980000000001');
+  });
+
+  it('reports unchanged credentials as no change', () => {
+    const c = client();
+    expect(c.updateCredentials({ playerId: '765611980000000000', playerToken: 'token' })).toBe(false);
+  });
+
+  it('exposes the address it is dialing', () => {
+    expect(client().address).toBe('127.0.0.1:28082');
   });
 
   it('keeps retrying after an aborted handshake', async () => {
