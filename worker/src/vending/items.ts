@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { logger } from '../logger.js';
-import { ITEM_ALIASES, resolveAlias } from './aliases.js';
+import { ALIAS_DISPLAY, ITEM_ALIASES, resolveAlias } from './aliases.js';
 
 export interface ItemInfo {
   name: string;
@@ -83,6 +83,32 @@ export function itemName(id: number): string {
 
 export function itemShortName(id: number): string | null {
   return items[String(id)]?.short ?? null;
+}
+
+/**
+ * How much shorter a nickname must be before it is worth using.
+ *
+ * "AK" for "Assault Rifle" pays for itself many times over; swapping a name
+ * for something barely shorter just costs clarity.
+ */
+const ALIAS_MIN_SAVING = 3;
+
+/**
+ * Item name for team chat, preferring the community nickname.
+ *
+ * Rust cuts chat at 128 characters, and the item name is repeated in every
+ * reply header. "AK" instead of "Assault Rifle" is eleven characters back —
+ * roughly one more shop listed on the line. It is also simply what people
+ * call it, so the reply reads more like a teammate than a catalogue.
+ *
+ * Discord has no such limit and keeps the full name.
+ */
+export function chatItemName(id: number): string {
+  const info = items[String(id)];
+  if (!info) return `item ${id}`;
+
+  const alias = ALIAS_DISPLAY[info.short];
+  return alias && info.name.length - alias.length >= ALIAS_MIN_SAVING ? alias : info.name;
 }
 
 /** True once a real dataset is loaded. */

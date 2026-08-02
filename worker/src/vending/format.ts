@@ -94,9 +94,15 @@ export function describeListing(machine: VendingMachine, order: SellOrder): stri
  * difference between eight listings on a line and two.
  */
 export function describeListingCompact(machine: VendingMachine, order: SellOrder): string {
-  const stock = order.amountInStock === 0 ? '·0' : `x${order.amountInStock}`;
-  const each = order.quantity === 1 ? '' : `/${order.quantity}`;
-  return `${machine.grid} ${order.costPerItem}${each}${stock}`;
+  // "D12 100 x2" — where, how much, how many left. The item and the currency
+  // are stated once in the header, so they are not repeated here.
+  const stock = order.amountInStock === 0 ? 'OUT' : `x${order.amountInStock}`;
+
+  // Bundles are the exception, so they are the only thing that needs marking:
+  // "100/5" is 100 for a pack of five.
+  const bundle = order.quantity === 1 ? '' : `/${order.quantity}`;
+
+  return `${machine.grid} ${order.costPerItem}${bundle} ${stock}`;
 }
 
 /**

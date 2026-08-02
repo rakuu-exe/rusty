@@ -152,7 +152,7 @@ interface CommandContext {
 interface ChatCommand {
   /** Trigger words. The first is canonical and the one `!help` lists. */
   names: readonly string[];
-  /** Argument hint for `!help`, e.g. "<item>". */
+  /** Argument hint for `!help`, e.g. "item". */
   usage?: string;
   run: (ctx: CommandContext) => Promise<string | null> | string | null;
 }

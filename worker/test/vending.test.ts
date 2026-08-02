@@ -408,7 +408,9 @@ describe('!vend on a busy map', () => {
     // How many shops, the price range, and the currency — before any listing.
     expect(reply).toContain('30 shops');
     expect(reply).toContain('100-187');
-    expect(reply).toContain('scrap');
+    expect(reply).toContain('Scrap');
+    // The nickname, not "Assault Rifle": eleven characters back on every reply.
+    expect(reply.startsWith('AK ')).toBe(true);
   });
 
   it('fits far more listings than the long form did', () => {
@@ -529,4 +531,68 @@ describe('every vending reply fits a Rust chat line', () => {
       expect(reply!.length).toBeLessThanOrEqual(128);
     });
   }
+});
+
+/**
+ * Rust chat renders rich-text markup, so it escapes angle brackets: a reply
+ * containing "<item>" reaches the player as "&#60;item&#62;". Usage hints are
+ * the obvious place this bites, since they are the one thing that naturally
+ * wants placeholder syntax.
+ */
+describe('replies survive Rust chat encoding', () => {
+  const store = new VendingStore();
+
+  const everyReply = [
+    resolveVendingCommand('vend', '', deps(store)),
+    resolveVendingCommand('price', '', deps(store)),
+    resolveVendingCommand('vendhistory', '', deps(store)),
+    resolveVendingCommand('vendhelp', '', deps(store)),
+    resolveVendingCommand('vendhelp', 'vend', deps(store)),
+    resolveVendingCommand('vendhelp', 'vendtrack', deps(store)),
+    resolveVendingCommand('vendtrack', '', deps(store)),
+    resolveVendingCommand('vendcommon', '', deps(store)),
+  ];
+
+  it('never contain angle brackets', () => {
+    for (const reply of everyReply) {
+      expect(reply, `reply: ${reply}`).not.toMatch(/[<>]/);
+    }
+  });
+
+  it('still show usage hints, just without markup characters', () => {
+    expect(resolveVendingCommand('vend', '', deps(store))).toContain('!vend item');
+  });
+});
+
+describe('nicknames in replies', () => {
+  const AK = 1545779598;
+  const HQM = 317398316;
+
+  function storeWith(itemId: number, currencyId: number): VendingStore {
+    const store = new VendingStore();
+    store.update([machine({ orders: [order({ itemId, currencyId, costPerItem: 50 })] })]);
+    return store;
+  }
+
+  it('names the item the way players do', () => {
+    expect(resolveVendingCommand('vend', 'ak', deps(storeWith(AK, SCRAP)))).toContain('AK');
+  });
+
+  it('names the currency the same way', () => {
+    // "HQM", not "High Quality Metal" — and not "hqm" either.
+    const reply = resolveVendingCommand('vend', 'ak', deps(storeWith(AK, HQM)))!;
+    expect(reply).toContain('HQM');
+    expect(reply).not.toContain('High Quality Metal');
+  });
+
+  it('keeps full names where the nickname would lose information', () => {
+    // !vendsearch exists to disambiguate, so it must not abbreviate.
+    expect(resolveVendingCommand('vendsearch', 'assault rifle', deps(new VendingStore()))).toContain(
+      'Assault Rifle',
+    );
+  });
+
+  it('leaves items without a nickname alone', () => {
+    expect(resolveVendingCommand('vend', 'scrap', deps(storeWith(SCRAP, AK)))).toContain('Scrap');
+  });
 });

@@ -6,7 +6,7 @@
  * asking a question. Everything else only reads the store.
  */
 
-import { findItem, findItems, hasItemData, itemName } from './items.js';
+import { chatItemName, findItem, findItems, hasItemData, itemName } from './items.js';
 import {
   MAX_CHAT_LENGTH,
   describeListing,
@@ -51,7 +51,7 @@ function splitPage(query: string): { text: string; page: number } {
 }
 
 /**
- * !vend <item> [page] — who is selling it right now.
+ * !vend item [page] — who is selling it right now.
  *
  * A popular item on a busy map has thirty-odd listings and the line holds
  * about eight, so the reply leads with the summary a shopper actually wants —
@@ -65,7 +65,7 @@ function vend(query: string, deps: VendingCommandDeps): string {
   if ('error' in resolved) return resolved.error;
 
   const all = deps.store.findListings(resolved.id);
-  const name = itemName(resolved.id);
+  const name = chatItemName(resolved.id);
 
   if (all.length === 0) return `${name}: not sold anywhere right now`;
 
@@ -81,7 +81,9 @@ function vend(query: string, deps: VendingCommandDeps): string {
     : `${Math.min(...costs)}-${Math.max(...costs)}`;
 
   const currency = sharedCurrency(listings.map((l) => l.order.currencyId));
-  const paidIn = currency === null ? '' : ` ${itemName(currency).toLowerCase()}`;
+  // Not lower-cased: the nickname may be an acronym, and "hqm" reads worse
+  // than "HQM".
+  const paidIn = currency === null ? '' : ` ${chatItemName(currency)}`;
 
   const entries = listings.map((l) => describeListingCompact(l.machine, l.order));
 
@@ -116,14 +118,14 @@ function vendhelp(query: string): string {
   // Budgeted rather than hand-counted: adding a command must not silently
   // push this over the line the game will cut.
   const head = 'Vending: ';
-  const hint = ' — !vendhelp <cmd>';
+  const hint = ' — !vendhelp cmd';
   const names = VENDING_HELP.filter((h) => h.name !== 'vendhelp').map((h) => `!${h.name}`);
 
   return head + joinCapped(names, ' ', MAX_CHAT_LENGTH, head.length + hint.length) + hint;
 }
 
 /**
- * !price <item> — what people pay for it.
+ * !price item — what people pay for it.
  *
  * Reports both directions, because "the price" of an item means one thing to a
  * buyer and another to a seller: shops selling it, and shops accepting it as
@@ -133,7 +135,7 @@ function price(query: string, deps: VendingCommandDeps): string {
   const resolved = resolveItem(query);
   if ('error' in resolved) return resolved.error;
 
-  const name = itemName(resolved.id);
+  const name = chatItemName(resolved.id);
   const selling = deps.store.findListings(resolved.id);
   const buying = deps.store.findBuyers(resolved.id);
 
@@ -165,7 +167,7 @@ function vendstats(query: string | null, deps: VendingCommandDeps): string {
   if ('error' in resolved) return resolved.error;
 
   const listings = deps.store.findListings(resolved.id);
-  const name = itemName(resolved.id);
+  const name = chatItemName(resolved.id);
   if (listings.length === 0) return `${name}: not sold anywhere right now`;
 
   const stats = priceSummary(listings.map((l) => l.order.costPerItem))!;
@@ -180,15 +182,15 @@ function vendcommon(deps: VendingCommandDeps): string {
   const top = deps.store.itemFrequency().slice(0, 5);
   if (top.length === 0) return 'No vending data yet';
 
-  return `Most listed: ${top.map((t, i) => `${i + 1}. ${itemName(t.itemId)} (${t.listings})`).join(' | ')}`;
+  return `Most listed: ${top.map((t, i) => `${i + 1}. ${chatItemName(t.itemId)} (${t.listings})`).join(' | ')}`;
 }
 
-/** !vendhistory <item> — what the bot watched change this session. */
+/** !vendhistory item — what the bot watched change this session. */
 function vendhistory(query: string, deps: VendingCommandDeps): string {
   const resolved = resolveItem(query);
   if ('error' in resolved) return resolved.error;
 
-  const name = itemName(resolved.id);
+  const name = chatItemName(resolved.id);
   const points = deps.store.historyFor(resolved.id);
 
   if (points.length === 0) return `${name}: no history this session`;
@@ -211,7 +213,7 @@ function vendhistory(query: string, deps: VendingCommandDeps): string {
 }
 
 /**
- * !vendtrack [grid] <item> — manage trackers.
+ * !vendtrack [grid] item — manage trackers.
  *
  * With no argument it lists. The grid form is detected by a leading token that
  * looks like a map cell, so "!vendtrack D12 ak" narrows to one shop area while
@@ -222,7 +224,7 @@ function vendtrack(args: string, deps: VendingCommandDeps): string {
 
   if (trimmed.length === 0) {
     const trackers = deps.store.listTrackers();
-    if (trackers.length === 0) return 'No trackers. Use !vendtrack <item> or !vendtrack <grid> <item>';
+    if (trackers.length === 0) return 'No trackers. Use !vendtrack item or !vendtrack grid item';
     return `Tracking: ${trackers.map((t) => (t.grid ? `${t.query} in ${t.grid}` : t.query)).join(' | ')}`;
   }
 
@@ -234,7 +236,7 @@ function vendtrack(args: string, deps: VendingCommandDeps): string {
   const id = hasItemData() ? findItem(query) : null;
   const tracker = deps.store.addTracker(query, id, grid);
 
-  const resolvedName = id !== null ? itemName(id) : `"${query}" (no exact item match, matching by name)`;
+  const resolvedName = id !== null ? chatItemName(id) : `"${query}" (no exact item match, matching by name)`;
   const where = tracker.grid ? ` in ${tracker.grid}` : ' anywhere';
 
   // Tell them what is already out there, so a tracker is useful immediately
@@ -278,14 +280,14 @@ function vendtrackClear(args: string, deps: VendingCommandDeps): string {
  * `vendsearch` worked but appeared nowhere.
  */
 const VENDING_HELP: readonly { name: string; usage: string; detail: string }[] = [
-  { name: 'vend', usage: 'vend <item> [page]', detail: 'shops selling it, cheapest first' },
-  { name: 'price', usage: 'price <item>', detail: 'what it sells for, and what shops pay for it' },
+  { name: 'vend', usage: 'vend item [page]', detail: 'cheapest first. Reads: grid, price, x = stock' },
+  { name: 'price', usage: 'price item', detail: 'what it sells for, and what shops pay for it' },
   { name: 'vendstats', usage: 'vendstats [item]', detail: 'price range seen this session' },
   { name: 'vendcommon', usage: 'vendcommon', detail: 'the most widely stocked items right now' },
-  { name: 'vendhistory', usage: 'vendhistory <item>', detail: 'how its price moved this session' },
-  { name: 'vendtrack', usage: 'vendtrack [grid] <item>', detail: 'alert when it comes in stock' },
+  { name: 'vendhistory', usage: 'vendhistory item', detail: 'how its price moved this session' },
+  { name: 'vendtrack', usage: 'vendtrack [grid] item', detail: 'alert when it comes in stock' },
   { name: 'vendtrack-clear', usage: 'vendtrack-clear [item]', detail: 'stop tracking; no item clears all' },
-  { name: 'vendsearch', usage: 'vendsearch <item>', detail: 'what item names your text matches' },
+  { name: 'vendsearch', usage: 'vendsearch item', detail: 'what item names your text matches' },
   { name: 'vendhelp', usage: 'vendhelp [command]', detail: 'this list, or detail on one command' },
 ];
 
@@ -305,10 +307,10 @@ export function resolveVendingCommand(
 ): string | null {
   switch (command) {
     case 'vend':
-      return args.trim() ? vend(args, deps) : 'Usage: !vend <item>';
+      return args.trim() ? vend(args, deps) : 'Usage: !vend item';
 
     case 'price':
-      return args.trim() ? price(args, deps) : 'Usage: !price <item>';
+      return args.trim() ? price(args, deps) : 'Usage: !price item';
 
     case 'vendstats':
       return vendstats(args.trim() || null, deps);
@@ -317,7 +319,7 @@ export function resolveVendingCommand(
       return vendcommon(deps);
 
     case 'vendhistory':
-      return args.trim() ? vendhistory(args, deps) : 'Usage: !vendhistory <item>';
+      return args.trim() ? vendhistory(args, deps) : 'Usage: !vendhistory item';
 
     case 'vendtrack':
       return vendtrack(args, deps);
@@ -332,6 +334,8 @@ export function resolveVendingCommand(
       // Helper for when a name does not resolve: shows what would match.
       const matches = findItems(args.trim(), 6);
       if (matches.length === 0) return `No item matching "${args.trim()}"`;
+      // Full names here: this command exists to disambiguate, so a nickname
+      // would defeat the point.
       return `Matches: ${matches.map((id) => itemName(id)).join(' | ')}`;
     }
 

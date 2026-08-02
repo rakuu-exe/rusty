@@ -187,3 +187,34 @@ export const ITEM_ALIASES: Readonly<Record<string, string>> = {
 export function resolveAlias(normalisedQuery: string): string | null {
   return ITEM_ALIASES[normalisedQuery] ?? null;
 }
+
+/**
+ * How to write an alias out: "ak" as AK, "bolty" as Bolty.
+ *
+ * Acronyms and model numbers are read as capitals, ordinary words are not —
+ * "BOLTY" looks like shouting where "AK" looks correct.
+ */
+function displayForm(alias: string): string {
+  if (alias.length <= 3 || /\d/.test(alias)) return alias.toUpperCase();
+  return alias[0]!.toUpperCase() + alias.slice(1);
+}
+
+/**
+ * Best community name per item, keyed by short name.
+ *
+ * The table above maps many aliases to one item; this picks one to write back
+ * out. Shortest wins, ties broken alphabetically so the choice is stable
+ * rather than dependent on key order.
+ */
+export const ALIAS_DISPLAY: Readonly<Record<string, string>> = (() => {
+  const best: Record<string, string> = {};
+
+  for (const [alias, short] of Object.entries(ITEM_ALIASES)) {
+    const current = best[short];
+    if (!current || alias.length < current.length || (alias.length === current.length && alias < current)) {
+      best[short] = alias;
+    }
+  }
+
+  return Object.fromEntries(Object.entries(best).map(([short, alias]) => [short, displayForm(alias)]));
+})();
