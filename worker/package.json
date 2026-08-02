@@ -17,7 +17,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "register-commands": "tsx src/discord/registerCommands.ts",
-    "fcm-register": "node scripts/fcm-register.mjs"
+    "fcm-register": "node scripts/fcm-register.mjs",
+    "fetch-items": "node scripts/fetch-items.mjs"
   },
   "dependencies": {
     "@liamcottle/push-receiver": "^0.0.4",

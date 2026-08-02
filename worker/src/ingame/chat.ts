@@ -25,7 +25,7 @@ import { EventSubject, describeState, type EventStateStore, type EventSubjectVal
 import { describeEstimate, estimateRespawn, type RespawnEstimate } from '../events/respawn.js';
 import { getRecentEvents } from '../db.js';
 import { DIRECTION_COMPASS, deepSeaState, type DeepSeaAnchor } from '../events/deepSea.js';
-import { resolveVendingCommand } from '../vending/commands.js';
+import { VENDING_COMMAND_USAGE, resolveVendingCommand } from '../vending/commands.js';
 import type { VendingStore } from '../vending/store.js';
 import { logger } from '../logger.js';
 import type { RustPlusClient } from '../rustplus/client.js';
@@ -136,6 +136,128 @@ async function lastSeenFor(
 }
 
 /**
+ * What a command handler is given. Everything a reply can need, already
+ * resolved, so handlers stay one-liners.
+ */
+interface CommandContext {
+  deps: InGameCommandDeps;
+  /** Text after the command word, original case preserved. */
+  args: string;
+  /** Status line for a subject: state, last-seen history, next-spawn estimate. */
+  status: (subject: EventSubjectValue) => Promise<string>;
+  client: RustPlusClient;
+  timezone: string;
+}
+
+interface ChatCommand {
+  /** Trigger words. The first is canonical and the one `!help` lists. */
+  names: readonly string[];
+  /** Argument hint for `!help`, e.g. "<item>". */
+  usage?: string;
+  run: (ctx: CommandContext) => Promise<string | null> | string | null;
+}
+
+/**
+ * Every in-game command, in one table.
+ *
+ * To add one, append an entry — nothing else needs touching, because dispatch
+ * and `!help` are both derived from this list. The previous switch statement
+ * kept its help text as a separate hand-written array, which had already
+ * drifted: `!vendsearch` worked but was not listed anywhere.
+ *
+ * Handlers must stay read-only. Commands answer questions about state; they
+ * never change it.
+ */
+const COMMANDS: readonly ChatCommand[] = [
+  // ---- event status ---------------------------------------------------------
+  { names: ['heli'], run: (c) => c.status(EventSubject.PatrolHelicopter) },
+  { names: ['cargo'], run: (c) => c.status(EventSubject.CargoShip) },
+  { names: ['large'], run: (c) => c.status(EventSubject.LargeOilRig) },
+  { names: ['small'], run: (c) => c.status(EventSubject.SmallOilRig) },
+  { names: ['chinook', 'ch47'], run: (c) => c.status(EventSubject.MonumentChinook) },
+  { names: ['vendor'], run: (c) => c.status(EventSubject.TravellingVendor) },
+  { names: ['crate'], run: (c) => c.status(EventSubject.LockedCrate) },
+  { names: ['deepsea'], run: (c) => describeDeepSea(c.deps) },
+
+  {
+    names: ['oil'],
+    // Both rigs at once, since they are tracked independently.
+    run: async (c) => {
+      const [large, small] = await Promise.all([
+        c.status(EventSubject.LargeOilRig),
+        c.status(EventSubject.SmallOilRig),
+      ]);
+      return `${large} | ${small}`;
+    },
+  },
+
+  {
+    names: ['events'],
+    // Everything at a glance, for when you have just logged in.
+    run: async (c) => {
+      const subjects = [
+        EventSubject.PatrolHelicopter,
+        EventSubject.CargoShip,
+        EventSubject.LargeOilRig,
+        EventSubject.SmallOilRig,
+        EventSubject.MonumentChinook,
+        EventSubject.TravellingVendor,
+      ];
+      return (await Promise.all(subjects.map(c.status))).join(' | ');
+    },
+  },
+
+  // ---- live server queries --------------------------------------------------
+  {
+    names: ['time'],
+    run: async (c) => {
+      const time = await c.client.getTime();
+      // Rust reports time as a float where the integer part is the hour.
+      const hours = Math.floor(time.time);
+      const minutes = Math.floor((time.time - hours) * 60);
+      return `In-game time: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    },
+  },
+  {
+    names: ['pop'],
+    run: async (c) => {
+      const info = await c.client.getInfo();
+      // Some servers omit queuedPlayers entirely, so absent != zero.
+      const queue = info.queuedPlayers ? ` (+${info.queuedPlayers} queued)` : '';
+      return `Population: ${info.players}/${info.maxPlayers}${queue}`;
+    },
+  },
+  {
+    names: ['wipe'],
+    run: async (c) => {
+      const info = await c.client.getInfo();
+      return `Wiped ${formatDuration(Date.now() - info.wipeTime * 1000)} ago`;
+    },
+  },
+  {
+    names: ['status'],
+    run: async (c) => {
+      const info = await c.client.getInfo();
+      return `${info.name} — ${info.players}/${info.maxPlayers} online`;
+    },
+  },
+
+  // ---- meta -----------------------------------------------------------------
+  { names: ['help'], run: (c) => helpText(c.deps.prefix) },
+];
+
+/** Trigger word to command, including aliases. Built once. */
+const BY_NAME = new Map<string, ChatCommand>(
+  COMMANDS.flatMap((command) => command.names.map((name) => [name, command] as const)),
+);
+
+/** `!help` text, derived from the tables so it cannot drift out of date. */
+function helpText(prefix: string): string {
+  const own = COMMANDS.map((c) => (c.usage ? `${c.names[0]} ${c.usage}` : c.names[0]!));
+  return `Commands: ${[...own, ...VENDING_COMMAND_USAGE].map((c) => prefix + c).join(' ')}`;
+}
+
+/**
  * Resolve a command to a reply, or null when the message is not a command.
  *
  * Pure with respect to bot state: it reads the store, the event log and the
@@ -199,91 +321,13 @@ export async function resolveInGameCommand(
     if (vendingReply !== null) return vendingReply;
   }
 
-  switch (rawCommand) {
-    // ---- event status, all pure reads -------------------------------------
-    case 'heli':
-      return status(EventSubject.PatrolHelicopter);
+  const command = BY_NAME.get(rawCommand);
 
-    case 'cargo':
-      return status(EventSubject.CargoShip);
+  // Unknown text starting with the prefix is ignored rather than answered, so
+  // ordinary team chat using "!" does not draw a reply every time.
+  if (!command) return null;
 
-    case 'large':
-      return status(EventSubject.LargeOilRig);
-
-    case 'small':
-      return status(EventSubject.SmallOilRig);
-
-    case 'chinook':
-    case 'ch47':
-      return status(EventSubject.MonumentChinook);
-
-    case 'vendor':
-      return status(EventSubject.TravellingVendor);
-
-    case 'crate':
-      return status(EventSubject.LockedCrate);
-
-    case 'deepsea':
-      return describeDeepSea(deps);
-
-    case 'oil': {
-      // Both rigs, since they are tracked independently.
-      const [large, small] = await Promise.all([
-        status(EventSubject.LargeOilRig),
-        status(EventSubject.SmallOilRig),
-      ]);
-      return `${large} | ${small}`;
-    }
-
-    case 'events': {
-      // Everything at a glance, for when you have just logged in.
-      const subjects = [
-        EventSubject.PatrolHelicopter,
-        EventSubject.CargoShip,
-        EventSubject.LargeOilRig,
-        EventSubject.SmallOilRig,
-        EventSubject.MonumentChinook,
-        EventSubject.TravellingVendor,
-      ];
-      return (await Promise.all(subjects.map((s) => status(s)))).join(' | ');
-    }
-
-    // ---- live server queries, still read-only ------------------------------
-    case 'time': {
-      const time = await client.getTime();
-      // Rust reports time as a float where the integer part is the hour.
-      const hours = Math.floor(time.time);
-      const minutes = Math.floor((time.time - hours) * 60);
-      return `In-game time: ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    }
-
-    case 'pop': {
-      const info = await client.getInfo();
-      // Some servers omit queuedPlayers entirely, so absent != zero.
-      const queue = info.queuedPlayers ? ` (+${info.queuedPlayers} queued)` : '';
-      return `Population: ${info.players}/${info.maxPlayers}${queue}`;
-    }
-
-    case 'wipe': {
-      const info = await client.getInfo();
-      return `Wiped ${formatDuration(Date.now() - info.wipeTime * 1000)} ago`;
-    }
-
-    case 'status': {
-      const info = await client.getInfo();
-      return `${info.name} — ${info.players}/${info.maxPlayers} online`;
-    }
-
-    case 'help':
-      return `Commands: ${['heli', 'cargo', 'large', 'small', 'oil', 'chinook', 'vendor', 'crate', 'deepsea', 'events', 'time', 'pop', 'wipe', 'status', 'vend <item>', 'price <item>', 'vendstats', 'vendcommon', 'vendhistory <item>', 'vendtrack']
-        .map((c) => deps.prefix + c)
-        .join(' ')}`;
-
-    default:
-      // Unknown text starting with the prefix is ignored rather than answered,
-      // so ordinary team chat using "!" does not draw a reply every time.
-      return null;
-  }
+  return command.run({ deps, args, status, client, timezone });
 }
 
 /**

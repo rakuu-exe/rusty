@@ -77,7 +77,3 @@ export function loadDiscordConfig(env: NodeJS.ProcessEnv = process.env): Discord
   return parsed.data;
 }
 
-/** Test hook -- forces the next loadConfig() to re-read the environment. */
-export function resetConfigCache(): void {
-  cached = null;
-}

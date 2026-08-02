@@ -20,8 +20,6 @@ export const TOKEN_COSTS = {
   sendTeamMessage: 2,
 } as const;
 
-export type RequestKind = keyof typeof TOKEN_COSTS;
-
 export function tokenCost(kind: string): number {
   return (TOKEN_COSTS as Record<string, number>)[kind] ?? TOKEN_COSTS.default;
 }

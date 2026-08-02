@@ -282,34 +282,6 @@ export async function getLastEvent(
 }
 
 /**
- * Most recent oil rig event for one specific rig.
- *
- * Both rigs share the 'oil_rig_crate' event type, so "!large" and "!small"
- * would otherwise answer with whichever rig fired most recently. The monument
- * name is stored in `raw` and filtered on here.
- */
-export async function getLastOilRigEvent(
-  serverId: string,
-  monument: string,
-  phase?: string,
-): Promise<EventLogRow | null> {
-  let query = db()
-    .from('event_log')
-    .select('*')
-    .eq('server_id', serverId)
-    .eq('event_type', 'oil_rig_crate')
-    .eq('raw->>monument', monument)
-    .order('created_at', { ascending: false })
-    .limit(1);
-
-  if (phase) query = query.eq('phase', phase);
-
-  const { data, error } = await query;
-  if (error) throw new Error(`Failed to load last oil rig event: ${error.message}`);
-  return (data?.[0] as EventLogRow | undefined) ?? null;
-}
-
-/**
  * Recent occurrences of one event phase, newest first.
  *
  * Kept for historical queries and diagnostics. No command depends on it:
@@ -458,9 +430,4 @@ export async function markTimerFired(timerId: string): Promise<void> {
     .update({ fired_at: new Date().toISOString() })
     .eq('id', timerId);
   if (error) throw new Error(`Failed to mark timer fired: ${error.message}`);
-}
-
-export async function cancelTimer(timerId: string): Promise<void> {
-  const { error } = await db().from('active_timers').delete().eq('id', timerId);
-  if (error) throw new Error(`Failed to cancel timer: ${error.message}`);
 }

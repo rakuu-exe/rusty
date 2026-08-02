@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InGameChatHandler, SelfMessageTracker, resolveInGameCommand } from '../src/ingame/chat.js';
 import { EventStateStore, EventSubject } from '../src/events/state.js';
+import { VENDING_COMMAND_USAGE } from '../src/vending/commands.js';
 import type { RustPlusClient } from '../src/rustplus/client.js';
 
 function fakeClient(): RustPlusClient & { sent: string[] } {
@@ -202,5 +203,52 @@ describe('live server queries', () => {
 
     expect(await resolveInGameCommand('!pop', deps(state))).toBe('Population: 100/200');
     expect(JSON.stringify(state.all())).toBe(before);
+  });
+});
+
+/**
+ * Help is generated, not written by hand.
+ *
+ * It used to be a literal array beside the dispatch switch, and it had already
+ * fallen behind: `!vendsearch` worked but was listed nowhere, so nobody could
+ * discover it. Deriving help from the same tables that drive dispatch makes
+ * that class of drift impossible.
+ */
+describe('!help', () => {
+  it('lists every command that dispatch accepts', async () => {
+    const reply = (await resolveInGameCommand('!help', deps()))!;
+
+    for (const command of ['heli', 'cargo', 'large', 'small', 'oil', 'chinook', 'vendor', 'crate', 'deepsea', 'events', 'time', 'pop', 'wipe', 'status', 'help']) {
+      expect(reply).toContain(`!${command}`);
+    }
+  });
+
+  it('lists the vending commands, including the one that was missing', async () => {
+    const reply = (await resolveInGameCommand('!help', deps()))!;
+
+    for (const usage of VENDING_COMMAND_USAGE) {
+      expect(reply).toContain(`!${usage}`);
+    }
+    expect(reply).toContain('!vendsearch');
+  });
+
+  it('uses the configured prefix', async () => {
+    const reply = (await resolveInGameCommand('.help', { ...deps(), prefix: '.' }))!;
+
+    expect(reply).toContain('.heli');
+    expect(reply).not.toContain('!heli');
+  });
+
+  it('answers command aliases the same as their canonical name', async () => {
+    const state = new EventStateStore();
+    expect(await resolveInGameCommand('!ch47', deps(state))).toBe(
+      await resolveInGameCommand('!chinook', deps(state)),
+    );
+  });
+
+  it('ignores unknown commands rather than replying', async () => {
+    // Ordinary team chat starting with "!" must not draw a reply.
+    expect(await resolveInGameCommand('!nonsense', deps())).toBeNull();
+    expect(await resolveInGameCommand('!', deps())).toBeNull();
   });
 });

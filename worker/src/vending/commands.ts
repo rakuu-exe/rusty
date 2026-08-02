@@ -187,6 +187,24 @@ function vendtrackClear(args: string, deps: VendingCommandDeps): string {
 }
 
 /**
+ * Vending commands, as `!help` should list them.
+ *
+ * Kept beside the dispatch below so the two are edited together. The chat
+ * module's help text used to hard-code its own copy of this list, which had
+ * already fallen behind — `vendsearch` worked but appeared nowhere.
+ */
+export const VENDING_COMMAND_USAGE: readonly string[] = [
+  'vend <item>',
+  'price <item>',
+  'vendstats',
+  'vendcommon',
+  'vendhistory <item>',
+  'vendtrack',
+  'vendtrack-clear',
+  'vendsearch <item>',
+];
+
+/**
  * Dispatch a vending command.
  *
  * Returns null when the command is not a vending one, so the caller can carry

@@ -23,8 +23,6 @@ export const DEEP_SEA_COOLDOWN_MS = 5_400_000; // 90m
 /** deepsea.wiperadiationphaseduration — radiation ramp before close. */
 export const DEEP_SEA_RADIATION_MS = 300_000; // 5m
 
-export const DEEP_SEA_CYCLE_MS = DEEP_SEA_OPEN_MS + DEEP_SEA_COOLDOWN_MS;
-
 /**
  * Which half of the map the zone covers.
  *
