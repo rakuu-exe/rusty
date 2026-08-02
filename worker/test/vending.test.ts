@@ -366,3 +366,167 @@ describe('formatting', () => {
     ).toContain('10 → 20');
   });
 });
+
+/**
+ * Fitting a busy map onto a 128-character chat line.
+ *
+ * The limit was previously set to 240, so the bot built a reply the game then
+ * cut off at 128 — losing the tail, including the "+N more" that said anything
+ * was missing. With thirty shops selling one item that looked like a broken
+ * command rather than a truncated one.
+ */
+describe('!vend on a busy map', () => {
+  const AK = 1545779598;
+
+  /** Thirty shops selling the same item at rising prices. */
+  function busyStore(count = 30): VendingStore {
+    const grids = Array.from({ length: count }, (_, i) => `${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[i % 26]}${i + 1}`);
+    const store = new VendingStore();
+    store.update(
+      grids.map((grid, i) =>
+        machine({
+          id: i + 1,
+          grid,
+          orders: [order({ itemId: AK, costPerItem: 100 + i * 3, amountInStock: (i % 7) + 1 })],
+        }),
+      ),
+    );
+    return store;
+  }
+
+  it('never exceeds what Rust will actually send', () => {
+    const store = busyStore();
+    for (const page of ['ak', 'ak 2', 'ak 3', 'ak 4']) {
+      const reply = resolveVendingCommand('vend', page, deps(store))!;
+      expect(reply.length).toBeLessThanOrEqual(128);
+    }
+  });
+
+  it('leads with the summary a shopper needs', () => {
+    const reply = resolveVendingCommand('vend', 'ak', deps(busyStore()))!;
+
+    // How many shops, the price range, and the currency — before any listing.
+    expect(reply).toContain('30 shops');
+    expect(reply).toContain('100-187');
+    expect(reply).toContain('scrap');
+  });
+
+  it('fits far more listings than the long form did', () => {
+    const reply = resolveVendingCommand('vend', 'ak', deps(busyStore()))!;
+    const listings = reply.match(/[A-Z]\d+ \d+/g) ?? [];
+
+    // The old format spent a third of the line repeating "Scrap → Assault
+    // Rifle" on every entry, which left room for two.
+    expect(listings.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('cheapest first, and pages through the rest', () => {
+    const store = busyStore();
+    const first = resolveVendingCommand('vend', 'ak', deps(store))!;
+    const second = resolveVendingCommand('vend', 'ak 2', deps(store))!;
+
+    expect(first).toContain('100');
+    expect(first).toContain('(1/');
+    expect(second).toContain('(2/');
+    // Later pages must not repeat the cheapest listing.
+    expect(second).not.toContain('A1 100');
+  });
+
+  it('clamps a page number past the end instead of erroring', () => {
+    const reply = resolveVendingCommand('vend', 'ak 99', deps(busyStore()))!;
+    expect(reply).toMatch(/\(\d+\/\d+\)/);
+  });
+
+  it('omits the page marker when everything fits', () => {
+    const reply = resolveVendingCommand('vend', 'ak', deps(busyStore(3)))!;
+    expect(reply).not.toContain('/');
+    expect(reply.length).toBeLessThanOrEqual(128);
+  });
+
+  it('falls back to sold-out shops only when there is nothing else', () => {
+    const store = new VendingStore();
+    store.update([machine({ orders: [order({ itemId: AK, amountInStock: 0 })] })]);
+
+    expect(resolveVendingCommand('vend', 'ak', deps(store))).toContain('SOLD OUT');
+  });
+});
+
+describe('!vendhelp', () => {
+  const store = new VendingStore();
+
+  it('lists the commands within one chat line', () => {
+    const reply = resolveVendingCommand('vendhelp', '', deps(store))!;
+
+    expect(reply).toContain('!vend');
+    expect(reply).toContain('!vendtrack');
+    expect(reply.length).toBeLessThanOrEqual(128);
+  });
+
+  it('explains a single command', () => {
+    const reply = resolveVendingCommand('vendhelp', 'vendtrack', deps(store))!;
+
+    expect(reply).toContain('vendtrack');
+    expect(reply).toContain('in stock');
+    expect(reply.length).toBeLessThanOrEqual(128);
+  });
+
+  it('tolerates a leading prefix on the argument', () => {
+    expect(resolveVendingCommand('vendhelp', '!price', deps(store))).toContain('price');
+  });
+
+  it('says so when the command does not exist', () => {
+    expect(resolveVendingCommand('vendhelp', 'nope', deps(store))).toContain('No vending command');
+  });
+});
+
+/**
+ * The limit applies to every reply, not just the ones anyone thought to check.
+ *
+ * Three commands budgeted only the entries they joined and ignored their own
+ * headers, so each still overshot 128 after the limit itself was fixed. A
+ * blanket assertion catches the next one without anyone remembering to.
+ */
+describe('every vending reply fits a Rust chat line', () => {
+  const AK = 1545779598;
+
+  function loadedStore(): VendingStore {
+    const store = new VendingStore();
+    const machines = Array.from({ length: 30 }, (_, i) =>
+      machine({
+        id: i + 1,
+        grid: `${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[i % 26]}${i + 1}`,
+        orders: [
+          order({ itemId: AK, costPerItem: 100 + i * 3, amountInStock: (i % 7) + 1 }),
+          order({ itemId: SCRAP, costPerItem: 40 + i, currencyId: AK }),
+        ],
+      }),
+    );
+    // Two rounds so price history exists for !vendhistory.
+    store.update(machines);
+    store.update(machines.map((m) => ({ ...m, orders: m.orders.map((o) => ({ ...o, costPerItem: o.costPerItem + 5 })) })));
+    return store;
+  }
+
+  const cases: [string, string][] = [
+    ['vend', 'assault rifle'],
+    ['vend', 'ak 2'],
+    ['price', 'assault rifle'],
+    ['vendstats', ''],
+    ['vendstats', 'assault rifle'],
+    ['vendcommon', ''],
+    ['vendhistory', 'assault rifle'],
+    ['vendtrack', 'assault rifle'],
+    ['vendtrack', ''],
+    ['vendsearch', 'rifle'],
+    ['vendhelp', ''],
+    ['vendhelp', 'vend'],
+  ];
+
+  for (const [command, args] of cases) {
+    it(`!${command} ${args}`.trim(), () => {
+      const reply = resolveVendingCommand(command, args, deps(loadedStore()));
+      expect(reply).not.toBeNull();
+      expect(reply!.length).toBeLessThanOrEqual(128);
+    });
+  }
+});

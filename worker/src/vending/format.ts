@@ -9,8 +9,15 @@
 import { itemName } from './items.js';
 import type { PricePoint, SellOrder, VendingEvent, VendingMachine } from './types.js';
 
-/** Roughly what fits on a Rust chat line before it becomes unreadable. */
-export const MAX_CHAT_LENGTH = 240;
+/**
+ * Rust cuts a team chat message off at 128 characters.
+ *
+ * This was 240, which is not a style choice but a bug: the bot built a reply
+ * up to 240 characters, the game silently discarded everything past 128, and
+ * what got discarded was the tail — including the "+N more" that said anything
+ * had been left out. A busy map made that look like the command was broken.
+ */
+export const MAX_CHAT_LENGTH = 128;
 
 /** "5x Scrap" or just "Scrap" for a single unit. */
 export function describeAmount(itemId: number, quantity: number): string {
@@ -24,20 +31,50 @@ export function describeOrder(order: SellOrder): string {
   return `${cost} → ${item}`;
 }
 
-/** Joins entries up to a length budget, appending "+N more" when truncated. */
-export function joinCapped(entries: string[], separator = ' | ', max = MAX_CHAT_LENGTH): string {
-  const kept: string[] = [];
-  let length = 0;
+/**
+ * Joins entries up to a length budget, appending "+N more" when truncated.
+ *
+ * `reserved` is for whatever the caller wraps around the result — a header
+ * like "Assault Rifle 14 shops: " is part of the message the game measures,
+ * and ignoring it was how replies still overshot the limit even after the
+ * limit itself was corrected.
+ */
+export function joinCapped(
+  entries: string[],
+  separator = ' | ',
+  max = MAX_CHAT_LENGTH,
+  reserved = 0,
+): string {
+  const budget = Math.max(max - reserved, 0);
 
-  for (const entry of entries) {
-    const cost = entry.length + (kept.length > 0 ? separator.length : 0);
-    // Always keep at least one, however long, so a reply is never empty.
-    if (kept.length > 0 && length + cost > max) break;
-    kept.push(entry);
-    length += cost;
-  }
+  const fill = (limit: number): string[] => {
+    const kept: string[] = [];
+    let length = 0;
 
+    for (const entry of entries) {
+      const cost = entry.length + (kept.length > 0 ? separator.length : 0);
+      // Always keep at least one, however long, so a reply is never empty.
+      if (kept.length > 0 && length + cost > limit) break;
+      kept.push(entry);
+      length += cost;
+    }
+    return kept;
+  };
+
+  if (fill(budget).length === entries.length) return entries.join(separator);
+
+  /**
+   * Truncating costs a "+N more" tail, and that tail is part of the message
+   * the game measures. Filling the budget and appending afterwards overshot by
+   * its whole length — which is how replies still ran over even once every
+   * caller was reserving space for its own header.
+   *
+   * The reservation uses the total count as an upper bound on N, so it can
+   * never be too small.
+   */
+  const kept = fill(Math.max(budget - ` (+${entries.length} more)`.length, 0));
   const omitted = entries.length - kept.length;
+
   return omitted > 0 ? `${kept.join(separator)} (+${omitted} more)` : kept.join(separator);
 }
 
@@ -45,6 +82,57 @@ export function joinCapped(entries: string[], separator = ' | ', max = MAX_CHAT_
 export function describeListing(machine: VendingMachine, order: SellOrder): string {
   const stock = order.amountInStock === 0 ? ' OUT OF STOCK' : ` x${order.amountInStock}`;
   return `${machine.grid} ${describeOrder(order)}${stock}`;
+}
+
+/**
+ * A listing stripped to what differs between them: grid, price, stock.
+ *
+ * The long form repeats the item name and the currency in every entry, so a
+ * single listing eats a third of the line and three of them fill it. Those
+ * two facts are identical across the whole reply, so they belong in the header
+ * once. "D12 100x2" against "D12 100 Scrap → Assault Rifle x2" is the
+ * difference between eight listings on a line and two.
+ */
+export function describeListingCompact(machine: VendingMachine, order: SellOrder): string {
+  const stock = order.amountInStock === 0 ? '·0' : `x${order.amountInStock}`;
+  const each = order.quantity === 1 ? '' : `/${order.quantity}`;
+  return `${machine.grid} ${order.costPerItem}${each}${stock}`;
+}
+
+/**
+ * Split entries into pages that each fit the budget.
+ *
+ * Entries vary in width, so pages are filled greedily rather than by a fixed
+ * count. That keeps every page as full as it can be, which matters when the
+ * line is 128 characters and a busy map has thirty shops selling one item.
+ */
+export function paginate(entries: string[], budget: number, separator = ' '): string[][] {
+  if (entries.length === 0) return [];
+
+  const pages: string[][] = [];
+  let page: string[] = [];
+  let length = 0;
+
+  for (const entry of entries) {
+    const cost = entry.length + (page.length > 0 ? separator.length : 0);
+    if (page.length > 0 && length + cost > budget) {
+      pages.push(page);
+      page = [];
+      length = 0;
+    }
+    page.push(entry);
+    length += entry.length + (page.length > 1 ? separator.length : 0);
+  }
+
+  if (page.length > 0) pages.push(page);
+  return pages;
+}
+
+/** The currency every listing shares, or null when they differ. */
+export function sharedCurrency(currencyIds: number[]): number | null {
+  if (currencyIds.length === 0) return null;
+  const first = currencyIds[0]!;
+  return currencyIds.every((id) => id === first) ? first : null;
 }
 
 /** Min / median / max of a set of prices, for !price and !vendstats. */

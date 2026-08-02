@@ -8,11 +8,15 @@
 
 import { findItem, findItems, hasItemData, itemName } from './items.js';
 import {
+  MAX_CHAT_LENGTH,
   describeListing,
+  describeListingCompact,
   describeOrder,
   describePricePoint,
   joinCapped,
+  paginate,
   priceSummary,
+  sharedCurrency,
 } from './format.js';
 import type { VendingStore } from './store.js';
 
@@ -33,21 +37,89 @@ function resolveItem(query: string): { id: number } | { error: string } {
   return { id };
 }
 
-/** !vend <item> — who is selling it right now. */
+/**
+ * Pull a trailing page number off a query: "ak 2" -> { text: "ak", page: 2 }.
+ *
+ * Item names never end in a bare number, so this is unambiguous in practice.
+ * Page numbers are 1-based because that is how the reply displays them.
+ */
+function splitPage(query: string): { text: string; page: number } {
+  const match = query.trim().match(/^(.*?)\s+(\d{1,3})$/);
+  if (!match) return { text: query.trim(), page: 1 };
+
+  return { text: match[1]!.trim(), page: Math.max(1, Number(match[2])) };
+}
+
+/**
+ * !vend <item> [page] — who is selling it right now.
+ *
+ * A popular item on a busy map has thirty-odd listings and the line holds
+ * about eight, so the reply leads with the summary a shopper actually wants —
+ * how many shops, and the price range — then the cheapest listings, since
+ * they are sorted by price. The rest are reachable by page rather than simply
+ * dropped.
+ */
 function vend(query: string, deps: VendingCommandDeps): string {
-  const resolved = resolveItem(query);
+  const { text, page } = splitPage(query);
+  const resolved = resolveItem(text);
   if ('error' in resolved) return resolved.error;
 
-  const listings = deps.store.findListings(resolved.id);
+  const all = deps.store.findListings(resolved.id);
   const name = itemName(resolved.id);
 
-  if (listings.length === 0) return `${name}: not sold anywhere right now`;
+  if (all.length === 0) return `${name}: not sold anywhere right now`;
 
-  const inStock = listings.filter((l) => l.order.amountInStock > 0);
-  const body = joinCapped((inStock.length > 0 ? inStock : listings).map((l) => describeListing(l.machine, l.order)));
-  const suffix = inStock.length === 0 ? ' (all out of stock)' : '';
+  // Out-of-stock shops are worse than useless to a shopper, so they only show
+  // when there is nothing else to show.
+  const inStock = all.filter((l) => l.order.amountInStock > 0);
+  const listings = inStock.length > 0 ? inStock : all;
+  const soldOut = inStock.length === 0 ? ' ALL SOLD OUT' : '';
 
-  return `${name} — ${listings.length} listing${listings.length === 1 ? '' : 's'}${suffix}: ${body}`;
+  const costs = listings.map((l) => l.order.costPerItem);
+  const range = Math.min(...costs) === Math.max(...costs)
+    ? `${costs[0]}`
+    : `${Math.min(...costs)}-${Math.max(...costs)}`;
+
+  const currency = sharedCurrency(listings.map((l) => l.order.currencyId));
+  const paidIn = currency === null ? '' : ` ${itemName(currency).toLowerCase()}`;
+
+  const entries = listings.map((l) => describeListingCompact(l.machine, l.order));
+
+  // Reserve the header and the page marker so the whole line fits, not just
+  // the listings inside it.
+  const header = `${name} ${listings.length} shops ${range}${paidIn}${soldOut}: `;
+  const pages = paginate(entries, MAX_CHAT_LENGTH - header.length - PAGE_MARKER_BUDGET);
+
+  const index = Math.min(page, pages.length) - 1;
+  const marker = pages.length > 1 ? ` (${index + 1}/${pages.length})` : '';
+
+  return `${header}${pages[index]!.join(' ')}${marker}`;
+}
+
+/** Room kept for a trailing "(2/4)" so it never pushes the line over. */
+const PAGE_MARKER_BUDGET = 8;
+
+/**
+ * !vendhelp [command] — the vending commands, and what they do.
+ *
+ * The general !help lists every command the bot has and has no room to explain
+ * any of them at 128 characters. This trades breadth for depth.
+ */
+function vendhelp(query: string): string {
+  const asked = query.trim().toLowerCase().replace(/^!/, '');
+
+  if (asked) {
+    const help = VENDING_HELP.find((h) => h.name === asked);
+    return help ? `!${help.usage} — ${help.detail}` : `No vending command "${asked}". Try !vendhelp`;
+  }
+
+  // Budgeted rather than hand-counted: adding a command must not silently
+  // push this over the line the game will cut.
+  const head = 'Vending: ';
+  const hint = ' — !vendhelp <cmd>';
+  const names = VENDING_HELP.filter((h) => h.name !== 'vendhelp').map((h) => `!${h.name}`);
+
+  return head + joinCapped(names, ' ', MAX_CHAT_LENGTH, head.length + hint.length) + hint;
 }
 
 /**
@@ -125,9 +197,17 @@ function vendhistory(query: string, deps: VendingCommandDeps): string {
   const recent = [...points].reverse().slice(0, 6);
   const stats = priceSummary(points.map((p) => p.costPerItem))!;
 
-  return `${name} this session — ${points.length} points, ${stats.min}-${stats.max}: ${joinCapped(
-    recent.map((p) => describePricePoint(p, deps.formatClock)),
-  )}`;
+  const head = `${name} this session — ${points.length} points, ${stats.min}-${stats.max}: `;
+
+  return (
+    head +
+    joinCapped(
+      recent.map((p) => describePricePoint(p, deps.formatClock)),
+      ' | ',
+      MAX_CHAT_LENGTH,
+      head.length,
+    )
+  );
 }
 
 /**
@@ -160,16 +240,19 @@ function vendtrack(args: string, deps: VendingCommandDeps): string {
   // Tell them what is already out there, so a tracker is useful immediately
   // rather than only when something next changes.
   const existing = id !== null ? deps.store.findListings(id) : [];
-  const now =
-    existing.length > 0
-      ? ` — currently ${existing.length} listing${existing.length === 1 ? '' : 's'}: ${joinCapped(
-          existing.slice(0, 3).map((l) => describeListing(l.machine, l.order)),
-          ' | ',
-          120,
-        )}`
-      : ' — none listed right now';
+  if (existing.length === 0) return `Tracking ${resolvedName}${where} — none listed right now`;
 
-  return `Tracking ${resolvedName}${where}${now}`;
+  const head = `Tracking ${resolvedName}${where} — ${existing.length} now: `;
+
+  return (
+    head +
+    joinCapped(
+      existing.map((l) => describeListingCompact(l.machine, l.order)),
+      ' ',
+      MAX_CHAT_LENGTH,
+      head.length,
+    )
+  );
 }
 
 /** !vendtrack-clear [item] */
@@ -187,22 +270,27 @@ function vendtrackClear(args: string, deps: VendingCommandDeps): string {
 }
 
 /**
- * Vending commands, as `!help` should list them.
+ * Every vending command, its usage, and what it does.
  *
- * Kept beside the dispatch below so the two are edited together. The chat
- * module's help text used to hard-code its own copy of this list, which had
- * already fallen behind — `vendsearch` worked but appeared nowhere.
+ * Single source of truth: `!help` takes the usage strings, `!vendhelp` takes
+ * the details, and the dispatch below matches the names. The chat module used
+ * to hard-code its own copy of this list, which had already fallen behind —
+ * `vendsearch` worked but appeared nowhere.
  */
-export const VENDING_COMMAND_USAGE: readonly string[] = [
-  'vend <item>',
-  'price <item>',
-  'vendstats',
-  'vendcommon',
-  'vendhistory <item>',
-  'vendtrack',
-  'vendtrack-clear',
-  'vendsearch <item>',
+const VENDING_HELP: readonly { name: string; usage: string; detail: string }[] = [
+  { name: 'vend', usage: 'vend <item> [page]', detail: 'shops selling it, cheapest first' },
+  { name: 'price', usage: 'price <item>', detail: 'what it sells for, and what shops pay for it' },
+  { name: 'vendstats', usage: 'vendstats [item]', detail: 'price range seen this session' },
+  { name: 'vendcommon', usage: 'vendcommon', detail: 'the most widely stocked items right now' },
+  { name: 'vendhistory', usage: 'vendhistory <item>', detail: 'how its price moved this session' },
+  { name: 'vendtrack', usage: 'vendtrack [grid] <item>', detail: 'alert when it comes in stock' },
+  { name: 'vendtrack-clear', usage: 'vendtrack-clear [item]', detail: 'stop tracking; no item clears all' },
+  { name: 'vendsearch', usage: 'vendsearch <item>', detail: 'what item names your text matches' },
+  { name: 'vendhelp', usage: 'vendhelp [command]', detail: 'this list, or detail on one command' },
 ];
+
+/** Usage strings for the general `!help`. */
+export const VENDING_COMMAND_USAGE: readonly string[] = VENDING_HELP.map((h) => h.usage);
 
 /**
  * Dispatch a vending command.
@@ -236,6 +324,9 @@ export function resolveVendingCommand(
 
     case 'vendtrack-clear':
       return vendtrackClear(args, deps);
+
+    case 'vendhelp':
+      return vendhelp(args);
 
     case 'vendsearch': {
       // Helper for when a name does not resolve: shows what would match.
