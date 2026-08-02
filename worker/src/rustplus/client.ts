@@ -13,6 +13,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { connect as tcpConnect } from 'node:net';
 import RustPlus, { type AppMessage } from '@liamcottle/rustplus.js';
 import { logger } from '../logger.js';
 import { RateLimitedQueue, TokenBucketRateLimiter } from './rateLimiter.js';
@@ -40,8 +41,50 @@ const MAX_BACKOFF_MS = 5 * 60_000;
  */
 const CONNECT_TIMEOUT_MS = 30_000;
 
+/**
+ * The error `ws` raises when the handshake is aborted mid-flight.
+ *
+ * Both close() and terminate() take this branch when readyState is CONNECTING
+ * (ws/lib/websocket.js), and rustplus.js's disconnect() calls terminate(). So
+ * the connect timeout above *causes* this error every time it fires. It says
+ * nothing about the server and must not be reported as a socket failure.
+ */
+const ABORTED_HANDSHAKE = 'WebSocket was closed before the connection was established';
+
+/** Long enough for a SYN/ACK across Europe, short enough not to stack up. */
+const TCP_PROBE_TIMEOUT_MS = 10_000;
+
 function timeoutFor(kind: string): number {
   return kind === 'getMap' ? MAP_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+}
+
+/**
+ * Bare TCP reachability check against the companion port.
+ *
+ * Aborting the handshake at 30s replaces the real network error with
+ * ABORTED_HANDSHAKE, since the OS takes ~75s to report ETIMEDOUT on its own.
+ * That left every failure looking identical. This recovers the distinction:
+ *
+ *   'open'        the port answers, so the refusal is above TCP -- a stale
+ *                 token or a per-playerId throttle
+ *   ETIMEDOUT     packets go nowhere; companion port firewalled or closed
+ *   ECONNREFUSED  host is up but nothing is listening on that port
+ *
+ * It opens a raw socket and closes it without speaking Rust+, so it neither
+ * authenticates nor spends anything against the per-playerId rate limit.
+ */
+function probeTcp(host: string, port: number): Promise<string> {
+  return new Promise((resolve) => {
+    const socket = tcpConnect({ host, port });
+    const finish = (result: string): void => {
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(TCP_PROBE_TIMEOUT_MS, () => finish('ETIMEDOUT (no answer)'));
+    socket.once('connect', () => finish('open'));
+    socket.once('error', (error: NodeJS.ErrnoException) => finish(error.code ?? error.message));
+  });
 }
 
 export interface RustPlusClientOptions {
@@ -155,14 +198,27 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
     const socket = new RustPlus(serverIp, appPort, playerId, playerToken);
     this.socket = socket;
 
+    // Set while tearing down a stalled handshake, so the resulting ws error is
+    // recognised as ours rather than reported as a failure from the server.
+    let abortingConnect = false;
+
     // A silently rejected connection never errors or closes, so give up on it
     // explicitly and let the normal backoff schedule another attempt.
     const connectTimer = setTimeout(() => {
       if (this.connected) return;
-      logger.warn(
-        { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS },
-        'Rust+ connection never completed -- token may be stale, or the server is rate limiting',
-      );
+
+      // Ask TCP directly why, before discarding the attempt -- the answer is
+      // what separates "port unreachable" from "token or throttle".
+      void probeTcp(serverIp, appPort).then((reachability) => {
+        logger.warn(
+          { server: this.label, timeoutMs: CONNECT_TIMEOUT_MS, port: appPort, reachability },
+          reachability === 'open'
+            ? 'companion port answers but the Rust+ handshake never completed -- stale token or per-player throttle'
+            : 'companion port is not reachable -- nothing to do with the token',
+        );
+      });
+
+      abortingConnect = true;
       try {
         socket.disconnect();
       } catch {
@@ -183,12 +239,23 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
       clearTimeout(connectTimer);
       const wasConnected = this.connected;
       this.connected = false;
-      logger.warn({ server: this.label }, 'Rust+ disconnected');
+      // A handshake we aborted ourselves was never a connection to lose.
+      if (!abortingConnect) logger.warn({ server: this.label }, 'Rust+ disconnected');
       if (wasConnected) this.emit('disconnected', 'socket closed');
       this.scheduleReconnect();
     });
 
     socket.on('error', (error: Error) => {
+      /**
+       * Our own abort, echoed back. Reporting it as a socket error made every
+       * failure look like the server had hung up on us, and rejected the
+       * startup promise into a spurious 'failed to start server runtime'.
+       */
+      if (abortingConnect && error.message === ABORTED_HANDSHAKE) {
+        logger.debug({ server: this.label }, 'stalled handshake torn down');
+        return;
+      }
+
       clearTimeout(connectTimer);
       logger.error({ server: this.label, err: error.message }, 'Rust+ socket error');
       this.emit('error', error);
