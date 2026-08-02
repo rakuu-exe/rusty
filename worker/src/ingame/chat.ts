@@ -114,6 +114,28 @@ async function estimateFor(
 }
 
 /**
+ * When the event log last recorded this subject arriving, or null.
+ *
+ * Uses the same spec as the estimate above, so anything estimable is also
+ * reportable. Rigs are deliberately absent: their history is per-monument and
+ * they have their own lifecycle description, which already carries timings.
+ */
+async function lastSeenFor(
+  deps: InGameCommandDeps,
+  subject: EventSubjectValue,
+): Promise<{ at: Date; grid: string | null } | null> {
+  const spec = ESTIMABLE[subject];
+  if (!spec) return null;
+
+  try {
+    const [row] = await getRecentEvents(deps.serverId, spec.type, spec.phase, { limit: 1 });
+    return row ? { at: new Date(row.created_at), grid: row.grid ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolve a command to a reply, or null when the message is not a command.
  *
  * Pure with respect to bot state: it reads the store, the event log and the
@@ -141,11 +163,30 @@ export async function resolveInGameCommand(
     clock: (date: Date) => formatClock(date, timezone),
   };
 
-  /** Status, with a measured next-spawn estimate appended where one exists. */
+  /** Status, with last-seen history and a next-spawn estimate where they exist. */
   const status = async (subject: EventSubjectValue): Promise<string> => {
-    const base = describeState(state.get(subject), formatters);
+    const current = state.get(subject);
+    const parts = [describeState(current, formatters)];
+
+    /**
+     * Session state only knows what this connection has watched, so after a
+     * restart everything reads "not observed this session" even when the
+     * event log has hours of history. Fill that gap from the log, which
+     * survives restarts, rather than claiming to know nothing.
+     */
+    if (current.state === 'unknown') {
+      const seen = await lastSeenFor(deps, subject);
+      if (seen) {
+        const ago = formatDuration(Date.now() - seen.at.getTime());
+        const where = seen.grid ? ` @ ${seen.grid}` : '';
+        parts.push(`last seen ${ago} ago at ${formatClock(seen.at, timezone)}${where}`);
+      }
+    }
+
     const estimate = await estimateFor(deps, subject);
-    return estimate ? `${base} — ${describeEstimate(estimate, formatDuration)}` : base;
+    if (estimate) parts.push(describeEstimate(estimate, formatDuration));
+
+    return parts.join(' — ');
   };
 
   // Vending owns its own command set. Returns null for anything else, so this

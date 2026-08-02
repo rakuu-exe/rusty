@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { logger } from '../logger.js';
+import { ITEM_ALIASES, resolveAlias } from './aliases.js';
 
 export interface ItemInfo {
   name: string;
@@ -18,6 +19,21 @@ export interface ItemInfo {
 }
 
 let items: Record<string, ItemInfo> = {};
+
+/**
+ * Short name to item id, rebuilt whenever the data set is loaded.
+ *
+ * Alias lookup happens on every vending command, and scanning 1200 entries
+ * each time is wasted work for something answerable by a hash.
+ */
+let byShortName = new Map<string, number>();
+
+function reindex(): void {
+  byShortName = new Map();
+  for (const [id, info] of Object.entries(items)) {
+    if (info.short) byShortName.set(info.short, Number(id));
+  }
+}
 
 /**
  * Load the item map.
@@ -46,6 +62,7 @@ export function loadItems(path?: string): number {
   for (const file of candidates) {
     try {
       items = JSON.parse(readFileSync(file, 'utf8')) as Record<string, ItemInfo>;
+      reindex();
       logger.info({ count: Object.keys(items).length, file }, 'item names loaded');
       return Object.keys(items).length;
     } catch {
@@ -55,6 +72,7 @@ export function loadItems(path?: string): number {
 
   logger.warn({ candidates }, 'item names unavailable; vending will show raw item ids');
   items = {};
+  reindex();
   return 0;
 }
 
@@ -87,6 +105,20 @@ export function findItems(query: string, limit = 8): number[] {
   const q = normalise(query);
   if (q.length === 0) return [];
 
+  /**
+   * A community alias outranks everything.
+   *
+   * Text ranking alone gets these wrong in ways that look arbitrary: "semi"
+   * matches "Semi Automatic Body" as a prefix before either weapon, and "ak"
+   * matches nothing at all. Other matches still follow, so "bow" leads with
+   * Hunting Bow without hiding Compound Bow.
+   */
+  const aliasId = aliasMatch(q);
+
+  // When only the best match is wanted, an alias settles it and the scan over
+  // every item is pure waste. findItem() takes this path on every command.
+  if (aliasId !== null && limit === 1) return [aliasId];
+
   const exact: number[] = [];
   const prefix: number[] = [];
   const contains: number[] = [];
@@ -100,7 +132,25 @@ export function findItems(query: string, limit = 8): number[] {
     else if (name.includes(q) || short.includes(q)) contains.push(Number(id));
   }
 
-  return [...exact, ...prefix, ...contains].slice(0, limit);
+  const ranked = [...exact, ...prefix, ...contains];
+  if (aliasId === null) return ranked.slice(0, limit);
+
+  return [aliasId, ...ranked.filter((id) => id !== aliasId)].slice(0, limit);
+}
+
+/**
+ * Item id an alias points at, or null.
+ *
+ * Aliases store short names rather than ids, so the id is looked up here. A
+ * short name that no longer exists returns null and the search simply falls
+ * back to text ranking, which is the right behaviour after a game update
+ * renames something out from under the table.
+ */
+function aliasMatch(normalisedQuery: string): number | null {
+  const short = resolveAlias(normalisedQuery);
+  if (short === null) return null;
+
+  return byShortName.get(short) ?? null;
 }
 
 /**
