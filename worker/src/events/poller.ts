@@ -19,6 +19,20 @@ export interface MarkerPollerEvents {
   error: [error: Error];
 }
 
+/**
+ * Failed polls in a row before the socket is treated as dead.
+ *
+ * The client only reconnects when ws reports an error or a close. A half-open
+ * socket reports neither, so without this the poller would back off to a
+ * minute apart and retry against a corpse forever, with isConnected still
+ * true and /status still green.
+ *
+ * Three failures is roughly seventy seconds of silence given the backoff
+ * below -- long enough not to fire on one slow response, short enough that
+ * nobody notices the gap.
+ */
+const STALL_LIMIT = 3;
+
 export class MarkerPoller extends EventEmitter<MarkerPollerEvents> {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -102,6 +116,16 @@ export class MarkerPoller extends EventEmitter<MarkerPollerEvents> {
       }
 
       this.emit('error', err);
+
+      /**
+       * The client still believes it is connected, yet nothing gets through.
+       * That is the half-open case, and only a forced reconnect clears it.
+       */
+      if (this.consecutiveFailures >= STALL_LIMIT && this.client.isConnected) {
+        this.consecutiveFailures = 0;
+        this.client.reconnect(`${STALL_LIMIT} marker polls failed while connected`);
+      }
+
       this.scheduleNext(backoff);
     }
   }

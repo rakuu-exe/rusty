@@ -29,7 +29,18 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const MAP_REQUEST_TIMEOUT_MS = 90_000;
 
 const INITIAL_BACKOFF_MS = 2_000;
-const MAX_BACKOFF_MS = 5 * 60_000;
+
+/**
+ * Ceiling on the reconnect delay.
+ *
+ * This is how long the bot can stay dark after a server comes back. Measured
+ * against a real nine-hour outage: the server returned and the bot was polling
+ * again within five minutes, which worked but is longer than it needs to be.
+ * A minute keeps recovery prompt while still being one connection attempt per
+ * minute to a single legitimate port -- ordinary client behaviour, not the
+ * port-sweeping pattern that gets an address filtered.
+ */
+const MAX_BACKOFF_MS = 60_000;
 
 /**
  * How long to wait for a connection to complete before giving up on it.
@@ -340,6 +351,44 @@ export class RustPlusClient extends EventEmitter<RustPlusClientEvents> {
       this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
       this.openSocket();
     }, jittered);
+  }
+
+  /**
+   * Throw away the current socket and connect again.
+   *
+   * A socket can half-open: TCP stays established while the server stops
+   * answering. ws reports neither an error nor a close for that, so nothing
+   * in the normal path notices -- isConnected stays true, requests time out
+   * one by one, and the bot sits there looking healthy while reporting
+   * nothing. Callers that can see requests failing use this to break the
+   * deadlock.
+   */
+  reconnect(reason: string): void {
+    if (this.shuttingDown) return;
+
+    logger.warn({ server: this.label, reason }, 'forcing Rust+ reconnect');
+
+    const wasConnected = this.connected;
+    this.connected = false;
+    this.backoffMs = INITIAL_BACKOFF_MS;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    try {
+      this.socket?.disconnect();
+    } catch {
+      /* already gone */
+    }
+    this.socket = null;
+
+    // Keep the Discord notifications paired: a forced reconnect that skipped
+    // this would post a lone 'connected' with nothing explaining it.
+    if (wasConnected) this.emit('disconnected', reason);
+
+    this.scheduleReconnect();
   }
 
   /** Close the socket and stop reconnecting. */
