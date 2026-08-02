@@ -110,16 +110,28 @@ export function describeListing(machine: VendingMachine, order: SellOrder): stri
  * once. "D12 100x2" against "D12 100 Scrap → Assault Rifle x2" is the
  * difference between eight listings on a line and two.
  */
-export function describeListingCompact(machine: VendingMachine, order: SellOrder): string {
-  // "D12 100 x2" — where, how much, how many left. The item and the currency
-  // are stated once in the header, so they are not repeated here.
+export function describeListingCompact(
+  machine: VendingMachine,
+  order: SellOrder,
+  options: { withCurrency?: boolean } = {},
+): string {
+  // "D12 100 x2" — where, how much, how many left. The item is named once in
+  // the header, so it is not repeated here.
   const stock = order.amountInStock === 0 ? 'OUT' : `x${order.amountInStock}`;
 
   // Bundles are the exception, so they are the only thing that needs marking:
   // "100/5" is 100 for a pack of five.
   const bundle = order.quantity === 1 ? '' : `/${order.quantity}`;
 
-  return `${machine.grid} ${order.costPerItem}${bundle} ${stock}`;
+  /**
+   * The currency belongs in the header when every listing shares one. When
+   * they do not, a bare number is unreadable — "S6 1" against "W7 100" looks
+   * like a hundredfold difference when one is priced in scrap and the other
+   * in high quality metal.
+   */
+  const paidIn = options.withCurrency ? ` ${chatItemName(order.currencyId)}` : '';
+
+  return `${machine.grid} ${order.costPerItem}${bundle}${paidIn} ${stock}`;
 }
 
 /**

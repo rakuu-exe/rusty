@@ -407,12 +407,12 @@ describe('!vend on a busy map', () => {
   it('leads with the summary a shopper needs', () => {
     const reply = resolveVendingCommand('vend', 'ak', deps(busyStore()))!;
 
-    // How many shops, the price range, and the currency — before any listing.
-    expect(reply).toContain('30 shops');
+    // How many listings, the price range, and the currency — before any of them.
+    expect(reply).toContain('30 listings');
     expect(reply).toContain('100-187');
     expect(reply).toContain('Scrap');
     // The nickname, not "Assault Rifle": eleven characters back on every reply.
-    expect(reply.startsWith('AK ')).toBe(true);
+    expect(reply.startsWith('AK:')).toBe(true);
   });
 
   it('fits far more listings than the long form did', () => {
@@ -673,5 +673,61 @@ describe('nickname table', () => {
     for (const display of Object.values(ALIAS_DISPLAY)) {
       expect(findItem(display), `typing "${display}" back`).not.toBeNull();
     }
+  });
+});
+
+/**
+ * Mixed currencies.
+ *
+ * A live reply read "P2 16 shops 1-400: S6 1 x2 C6 1 x4 ... W7 100 x1". Two
+ * separate failures: listings ran together with no separator, and the range
+ * was computed across different currencies, so "1-400" was arithmetic on
+ * unrelated units. A shop wanting 1 HQM and one wanting 400 scrap are not
+ * two ends of a price range.
+ */
+describe('!vend with mixed currencies', () => {
+  const P2 = 818877484;
+  const HQM = 317398316;
+
+  function mixedStore(): VendingStore {
+    const store = new VendingStore();
+    store.update([
+      machine({ id: 1, grid: 'S6', orders: [order({ itemId: P2, currencyId: HQM, costPerItem: 1 })] }),
+      machine({ id: 2, grid: 'W7', orders: [order({ itemId: P2, currencyId: SCRAP, costPerItem: 100 })] }),
+    ]);
+    return store;
+  }
+
+  it('does not invent a range across currencies', () => {
+    const reply = resolveVendingCommand('vend', 'p2', deps(mixedStore()))!;
+
+    expect(reply).toContain('mixed currency');
+    expect(reply).not.toContain('1-100');
+  });
+
+  it('names the currency on each listing instead', () => {
+    const reply = resolveVendingCommand('vend', 'p2', deps(mixedStore()))!;
+
+    expect(reply).toContain('S6 1 HQM');
+    expect(reply).toContain('W7 100 Scrap');
+  });
+
+  it('separates listings so they can be told apart', () => {
+    const reply = resolveVendingCommand('vend', 'p2', deps(mixedStore()))!;
+    expect(reply).toContain(' | ');
+  });
+
+  it('still names the currency once when they all agree', () => {
+    const store = new VendingStore();
+    store.update([
+      machine({ id: 1, grid: 'S6', orders: [order({ itemId: P2, currencyId: SCRAP, costPerItem: 10 })] }),
+      machine({ id: 2, grid: 'W7', orders: [order({ itemId: P2, currencyId: SCRAP, costPerItem: 40 })] }),
+    ]);
+
+    const reply = resolveVendingCommand('vend', 'p2', deps(store))!;
+
+    expect(reply).toContain('10-40 Scrap');
+    // Not repeated on every entry once the header has said it.
+    expect(reply).toContain('S6 10 x5');
   });
 });

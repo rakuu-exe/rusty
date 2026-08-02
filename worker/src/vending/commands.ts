@@ -75,28 +75,54 @@ function vend(query: string, deps: VendingCommandDeps): string {
   const listings = inStock.length > 0 ? inStock : all;
   const soldOut = inStock.length === 0 ? ' ALL SOLD OUT' : '';
 
+  const currency = sharedCurrency(listings.map((l) => l.order.currencyId));
+
+  /**
+   * A price range only means anything within one currency.
+   *
+   * Sixteen listings priced in a mix produced "1-400", which reads as a range
+   * but is arithmetic across unrelated units — one shop wanting 1 of something
+   * and another wanting 400 of something else. When currencies differ the
+   * range is dropped and each listing names its own instead.
+   */
   const costs = listings.map((l) => l.order.costPerItem);
-  const range = Math.min(...costs) === Math.max(...costs)
+  const span = Math.min(...costs) === Math.max(...costs)
     ? `${costs[0]}`
     : `${Math.min(...costs)}-${Math.max(...costs)}`;
 
-  const currency = sharedCurrency(listings.map((l) => l.order.currencyId));
-  // Not lower-cased: the nickname may be an acronym, and "hqm" reads worse
-  // than "HQM".
-  const paidIn = currency === null ? '' : ` ${chatItemName(currency)}`;
+  const plural = listings.length === 1 ? '' : 's';
+  const summary =
+    currency === null
+      ? `${listings.length} listing${plural}, mixed currency`
+      : `${listings.length} listing${plural}, ${span} ${chatItemName(currency)}`;
 
-  const entries = listings.map((l) => describeListingCompact(l.machine, l.order));
+  const entries = listings.map((l) =>
+    describeListingCompact(l.machine, l.order, { withCurrency: currency === null }),
+  );
 
   // Reserve the header and the page marker so the whole line fits, not just
   // the listings inside it.
-  const header = `${name} ${listings.length} shops ${range}${paidIn}${soldOut}: `;
-  const pages = paginate(entries, MAX_CHAT_LENGTH - header.length - PAGE_MARKER_BUDGET);
+  const header = `${name}: ${summary}${soldOut}${LISTING_SEPARATOR}`;
+  const pages = paginate(
+    entries,
+    MAX_CHAT_LENGTH - header.length - PAGE_MARKER_BUDGET,
+    LISTING_SEPARATOR,
+  );
 
   const index = Math.min(page, pages.length) - 1;
   const marker = pages.length > 1 ? ` (${index + 1}/${pages.length})` : '';
 
-  return `${header}${pages[index]!.join(' ')}${marker}`;
+  return `${header}${pages[index]!.join(LISTING_SEPARATOR)}${marker}`;
 }
+
+/**
+ * Listings run together without this.
+ *
+ * "S6 1 x2 C6 1 x4 D18 4 x1" is a wall of numbers with no way to see where one
+ * shop ends and the next begins; the three characters this costs buy back far
+ * more than they take.
+ */
+const LISTING_SEPARATOR = ' | ';
 
 /** Room kept for a trailing "(2/4)" so it never pushes the line over. */
 const PAGE_MARKER_BUDGET = 8;
