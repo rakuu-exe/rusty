@@ -26,7 +26,7 @@
  * is sitting on an oil rig, and the Deep Sea zone — is in the README.
  */
 
-import { formatGridPosition, getCorrectedMapSize, distance } from '../rustplus/grid.js';
+import { formatGridPosition, getCorrectedMapSize, isOutsideGridSystem, distance } from '../rustplus/grid.js';
 import type { MonumentIndex } from '../rustplus/monuments.js';
 import { MarkerType, type RustMapMarker } from '../rustplus/types.js';
 import { OIL_RIG_CRATE_UNLOCK_MS } from './constants.js';
@@ -399,6 +399,21 @@ export class EventDetector {
 
     tracker.hoverSamples += 1;
     if (tracker.hoverSamples < CHINOOK_HOVER_SAMPLES) return [];
+
+    /**
+     * Crate drops happen on the mainland.
+     *
+     * Both Oil Rigs sit outside the grid entirely — on this map at y≈4330
+     * against a corrected size of 3948.75 — so an in-grid hover separates a
+     * monument drop from a rig delivery on position alone. That matters
+     * because the only other thing keeping them apart is the 300u rig radius
+     * on tracker.oilRig, and a single missed sample on approach would leak a
+     * rig delivery through as a phantom crate drop.
+     *
+     * Measured: the two recorded Chinooks hovered at (-335, 4296) and
+     * (3271, 4358). Both are off-grid, and both were rig deliveries.
+     */
+    if (isOutsideGridSystem(marker.x, marker.y, this.mapSize)) return [];
 
     // A hover in open ground is not a drop worth reporting; crates land at
     // monuments, and naming the monument is most of the value of the alert.

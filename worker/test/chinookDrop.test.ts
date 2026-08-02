@@ -156,3 +156,92 @@ describe('thresholds', () => {
     expect(CHINOOK_HOVER_SAMPLES).toBeGreaterThanOrEqual(2);
   });
 });
+
+/**
+ * Mainland-only drops.
+ *
+ * Oil rigs sit outside the grid system entirely, so an in-grid hover is a
+ * position-based separator between a monument crate drop and a rig delivery.
+ * It backstops tracker.oilRig, which depends on the Chinook being sampled
+ * within 300u of the rig on approach -- one missed poll there would otherwise
+ * leak a rig delivery through as a phantom crate drop.
+ *
+ * The coordinates below are the real hover positions from a recorded feed.
+ */
+describe('drops must be on the mainland', () => {
+  /** Off-grid: the recorded Large Oil Rig delivery. */
+  const LARGE_RIG_HOVER = { x: 3271, y: 4358 };
+  /** Off-grid to the north-west: the recorded Small Oil Rig delivery. */
+  const SMALL_RIG_HOVER = { x: -335, y: 4296 };
+
+  it('ignores a hover at the Large Oil Rig', () => {
+    const events = fly(detector(), [
+      ...approach(LARGE_RIG_HOVER.x, LARGE_RIG_HOVER.y),
+      ...hover(LARGE_RIG_HOVER.x, LARGE_RIG_HOVER.y, 6),
+    ]);
+
+    expect(events.filter((e) => e.type === 'locked_crate')).toHaveLength(0);
+  });
+
+  it('ignores a hover off the west edge, where the Small Oil Rig sits', () => {
+    // Negative x is outside the grid just as surely as y beyond the map is.
+    const events = fly(detector(), [
+      ...approach(SMALL_RIG_HOVER.x, SMALL_RIG_HOVER.y),
+      ...hover(SMALL_RIG_HOVER.x, SMALL_RIG_HOVER.y, 6),
+    ]);
+
+    expect(events.filter((e) => e.type === 'locked_crate')).toHaveLength(0);
+  });
+
+  it('still reports a hover at a mainland monument', () => {
+    // The control: same flight shape, inside the grid, beside Launch Site.
+    const events = fly(detector(), [
+      ...approach(LAUNCH_SITE.x, LAUNCH_SITE.y),
+      ...hover(LAUNCH_SITE.x, LAUNCH_SITE.y, 6),
+    ]);
+
+    const drops = events.filter((e) => e.type === 'locked_crate');
+    expect(drops).toHaveLength(1);
+    expect(drops[0]!.phase).toBe('dropped');
+    expect(drops[0]!.monument).toBe('Launch Site');
+  });
+
+  /**
+   * The case the guard actually exists for.
+   *
+   * A coastal monument puts open water inside the 250u drop radius, and the
+   * oil rig branch does not apply because there is no rig anywhere near. So
+   * without the mainland check a Chinook hovering offshore reports a crate
+   * drop in the sea, attributed to whichever monument happens to be on the
+   * shoreline. Two Chinooks were observed vanishing 175u from a lighthouse,
+   * which is exactly this geometry.
+   */
+  it('ignores a hover offshore, beside a coastal monument', () => {
+    const LIGHTHOUSE = { token: 'lighthouse', x: 2000, y: 100 };
+    const coastal = new EventDetector({
+      mapSize: MAP_SIZE,
+      monuments: new MonumentIndex([LIGHTHOUSE]),
+    });
+
+    // 160u from the lighthouse -- inside the drop radius, but below y=0 and
+    // therefore off the grid, in the water.
+    const events = fly(coastal, [...approach(2000, -60), ...hover(2000, -60, 6)]);
+
+    expect(events.filter((e) => e.type === 'locked_crate')).toHaveLength(0);
+  });
+
+  it('reports the same hover once it is over land', () => {
+    // Control for the test above: same lighthouse, hover moved inside the
+    // grid. This is what proves the guard rejects on position, not on the
+    // monument being coastal.
+    const LIGHTHOUSE = { token: 'lighthouse', x: 2000, y: 100 };
+    const coastal = new EventDetector({
+      mapSize: MAP_SIZE,
+      monuments: new MonumentIndex([LIGHTHOUSE]),
+    });
+
+    const events = fly(coastal, [...approach(2000, 60), ...hover(2000, 60, 6)]);
+
+    expect(events.filter((e) => e.type === 'locked_crate')).toHaveLength(1);
+  });
+});
