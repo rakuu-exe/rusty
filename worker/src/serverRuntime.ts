@@ -402,8 +402,36 @@ export class ServerRuntime {
     return this.deepSeaDirection;
   }
 
+  /**
+   * Re-read the population before reporting it.
+   *
+   * getInfo() otherwise runs once per connection, so /status showed the
+   * figure as it stood at connect time. After an overnight reconnect that
+   * meant a reading hours old -- and because the bot reconnected the moment
+   * the server came back from an outage, the frozen value was 0/300.
+   *
+   * One token, only when somebody asks, against a marker poll that spends one
+   * every five seconds. A failure keeps the cached figure rather than failing
+   * the command, since a stale number is still more useful than an error.
+   */
+  private async refreshInfo(): Promise<void> {
+    if (!this.client.isConnected) return;
+
+    try {
+      const info = await this.client.getInfo();
+      this.mapSize = info.mapSize;
+      this.lastInfo = { players: info.players, maxPlayers: info.maxPlayers };
+    } catch (error) {
+      logger.debug(
+        { err: error instanceof Error ? error.message : String(error), server: this.options.row.name },
+        'could not refresh server info for status',
+      );
+    }
+  }
+
   async status(): Promise<ServerStatus> {
     const { row } = this.options;
+    await this.refreshInfo();
     const pending = await getPendingTimers(row.id);
 
     return {
