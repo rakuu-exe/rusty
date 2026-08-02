@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEEP_SEA_OPEN_MS,
+  anchorAppliesToWipe,
   anchorFromClosesIn,
   deepSeaState,
   parseDuration,
@@ -74,5 +75,34 @@ describe('direction', () => {
     expect(DIRECTION_COMPASS.BOTTOM).toBe('South');
     expect(DIRECTION_COMPASS.LEFT).toBe('West');
     expect(DIRECTION_COMPASS.RIGHT).toBe('East');
+  });
+});
+
+/**
+ * The wipe boundary.
+ *
+ * Deep Sea's hemisphere is fixed for a wipe and its cycle restarts with the
+ * map, but the event log is kept across wipes and getLastEvent does not filter
+ * by one. Without this check the first connection after a wipe restored the
+ * previous map's anchor, producing a countdown and a location that were both
+ * confidently wrong.
+ */
+describe('anchorAppliesToWipe', () => {
+  const wipe = Math.floor(new Date('2026-08-06T13:00:00Z').getTime() / 1000);
+
+  it('rejects an anchor recorded before the wipe', () => {
+    expect(anchorAppliesToWipe(new Date('2026-08-05T20:00:00Z'), wipe)).toBe(false);
+  });
+
+  it('accepts an anchor recorded after the wipe', () => {
+    expect(anchorAppliesToWipe(new Date('2026-08-06T18:30:00Z'), wipe)).toBe(true);
+  });
+
+  it('accepts an anchor recorded exactly at the wipe', () => {
+    expect(anchorAppliesToWipe(new Date('2026-08-06T13:00:00Z'), wipe)).toBe(true);
+  });
+
+  it('rejects an anchor one second before the wipe', () => {
+    expect(anchorAppliesToWipe(new Date('2026-08-06T12:59:59Z'), wipe)).toBe(false);
   });
 });

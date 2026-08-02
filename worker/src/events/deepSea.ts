@@ -45,6 +45,21 @@ export const DIRECTION_COMPASS: Record<DeepSeaDirection, string> = {
   RIGHT: 'East',
 };
 
+/**
+ * Whether a recorded anchor still describes the current wipe.
+ *
+ * Deep Sea's hemisphere is fixed for a wipe and its cycle restarts with the
+ * map, so an anchor from a previous wipe is not merely stale -- both the
+ * countdown and the location it implies are wrong. The event log is kept
+ * across wipes and is not filtered by one, so this has to be checked
+ * explicitly rather than assumed.
+ *
+ * @param wipeTimeSeconds unix seconds, as Rust+ reports it in AppInfo
+ */
+export function anchorAppliesToWipe(anchoredAt: Date, wipeTimeSeconds: number): boolean {
+  return anchoredAt.getTime() >= wipeTimeSeconds * 1000;
+}
+
 export function isDeepSeaDirection(value: string): value is DeepSeaDirection {
   return (DEEP_SEA_DIRECTIONS as string[]).includes(value);
 }

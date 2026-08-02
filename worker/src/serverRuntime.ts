@@ -18,7 +18,7 @@ import {
 } from './db.js';
 import { CARGO_SHIP_EGRESS_MS, EventDetector } from './events/detector.js';
 import { EventSubject, type EventStateStore } from './events/state.js';
-import { isDeepSeaDirection, type DeepSeaDirection } from './events/deepSea.js';
+import { anchorAppliesToWipe, isDeepSeaDirection, type DeepSeaDirection } from './events/deepSea.js';
 import { MarkerPoller } from './events/poller.js';
 import { TimerScheduler } from './events/timers.js';
 import type { DetectedEvent } from './events/types.js';
@@ -163,9 +163,16 @@ export class ServerRuntime {
       // Deep Sea's cycle keeps running while the bot is down, so a previously
       // recorded anchor stays valid and is restored rather than re-asked for.
       const anchor = await getLastEvent(row.id, 'deep_sea', 'opened');
-      this.deepSeaAnchor = anchor ? new Date(anchor.created_at) : null;
+      const anchoredAt = anchor ? new Date(anchor.created_at) : null;
+
+      // The event log survives wipes and getLastEvent does not filter by one,
+      // so without this check a wipe restores the previous map's anchor --
+      // and with it a hemisphere that is fixed per wipe and no longer true.
+      const current = anchoredAt !== null && anchorAppliesToWipe(anchoredAt, info.wipeTime);
+
+      this.deepSeaAnchor = current ? anchoredAt : null;
       this.deepSeaDirection =
-        anchor?.grid && isDeepSeaDirection(anchor.grid) ? anchor.grid : null;
+        current && anchor?.grid && isDeepSeaDirection(anchor.grid) ? anchor.grid : null;
 
       this.chat = new InGameChatHandler(
         {
