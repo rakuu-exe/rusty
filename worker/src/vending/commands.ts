@@ -25,6 +25,44 @@ export interface VendingCommandDeps {
   formatClock: (date: Date) => string;
 }
 
+/**
+ * What to say when the marker feed carries no shops at all.
+ *
+ * Facepunch removed every non-player map marker from the Rust+ API on
+ * 6 August 2026 (commits.facepunch.com/612220). Shops are still on the
+ * in-game map; they are simply no longer sent to companion apps, so this is
+ * not something the bot can work around.
+ *
+ * Saying so beats the alternative. Without shop data `!vend ak` answered "AK:
+ * not sold anywhere right now", which is a confident statement about the
+ * server made by a bot that cannot see a single shop -- and it reads as the
+ * bot working fine on a quiet map, which is why the fault looked like a
+ * vending bug rather than a dead feed.
+ *
+ * The date is named because the obvious reading of a sudden loss is that the
+ * bot broke, and the next person to wonder should not have to re-derive this
+ * from a packet dump.
+ */
+export const VENDING_UNAVAILABLE =
+  'No shop data: Rust+ stopped sending vending machines on 6 Aug 2026. Not a bot fault, nothing to search';
+
+/**
+ * Commands that cannot answer without shop data.
+ *
+ * `vendsearch` and `vendhelp` are deliberately absent: one reads the item
+ * table and the other the command list, and neither ever came from the marker
+ * feed, so both still do exactly what they claim.
+ */
+const NEEDS_SHOP_DATA: ReadonlySet<string> = new Set([
+  'vend',
+  'price',
+  'vendstats',
+  'vendcommon',
+  'vendhistory',
+  'vendtrack',
+  'vendtrack-clear',
+]);
+
 /** Resolve free text to an item, or explain why it could not be resolved. */
 function resolveItem(query: string): { id: number } | { error: string } {
   if (!hasItemData()) {
@@ -347,6 +385,12 @@ export function resolveVendingCommand(
   args: string,
   deps: VendingCommandDeps,
 ): string | null {
+  /**
+   * Checked before dispatch rather than inside each command, so a new command
+   * cannot forget it and start answering questions from an empty store.
+   */
+  if (NEEDS_SHOP_DATA.has(command) && !deps.store.hasVendingData) return VENDING_UNAVAILABLE;
+
   switch (command) {
     case 'vend':
       return args.trim() ? vend(args, deps) : 'Usage: !vend item';

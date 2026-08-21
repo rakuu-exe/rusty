@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { InGameChatHandler, SelfMessageTracker, resolveInGameCommand } from '../src/ingame/chat.js';
 import { EventStateStore, EventSubject } from '../src/events/state.js';
 import { VENDING_COMMAND_USAGE } from '../src/vending/commands.js';
+import { VendingStore } from '../src/vending/store.js';
 import type { RustPlusClient } from '../src/rustplus/client.js';
 
 function fakeClient(): RustPlusClient & { sent: string[] } {
@@ -23,6 +24,15 @@ function fakeClient(): RustPlusClient & { sent: string[] } {
 
 function deps(state = new EventStateStore()) {
   return { serverId: 's1', client: fakeClient(), prefix: '!', state };
+}
+
+/** A store that has seen a shop, so vending commands count as available. */
+function stockedStore(): VendingStore {
+  const store = new VendingStore();
+  store.update([
+    { id: 1, name: 'Shop', x: 2000, y: 2000, grid: 'N13', outOfStock: false, orders: [] },
+  ]);
+  return store;
 }
 
 const PAIRED_STEAM_ID = '76561190000000000';
@@ -224,12 +234,32 @@ describe('!help', () => {
   });
 
   it('lists the vending commands, including the one that was missing', async () => {
-    const reply = (await resolveInGameCommand('!help', deps()))!;
+    const reply = (await resolveInGameCommand('!help', { ...deps(), vending: stockedStore() }))!;
 
     for (const usage of VENDING_COMMAND_USAGE) {
       expect(reply).toContain(`!${usage}`);
     }
     expect(reply).toContain('!vendsearch');
+  });
+
+  /**
+   * Since Facepunch dropped shop markers on 6 August 2026 the store stays
+   * empty, and nine commands that can only answer "no shop data" would crowd
+   * the working ones off a 128-character line while promising a feature the
+   * bot cannot deliver.
+   */
+  it('omits the vending commands when the server sends no shop data', async () => {
+    const reply = (await resolveInGameCommand('!help', { ...deps(), vending: new VendingStore() }))!;
+
+    for (const usage of VENDING_COMMAND_USAGE) {
+      expect(reply, `!${usage}`).not.toContain(`!${usage}`);
+    }
+    expect(reply).not.toContain('!vendsearch');
+
+    // !vendor is the Travelling Vendor event command, not a shop command, and
+    // shares a prefix with !vend -- it must survive.
+    expect(reply).toContain('!vendor');
+    expect(reply).toContain('!heli');
   });
 
   it('uses the configured prefix', async () => {

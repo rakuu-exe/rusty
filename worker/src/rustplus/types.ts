@@ -43,8 +43,17 @@ export interface RustMapMarker {
   name?: string;
   outOfStock?: boolean;
   /**
-   * Present on vending machines and genuinely populated, unlike crate markers.
-   * Verified live: 153 of 167 machines carried orders, 724 in total.
+   * Declared on vending machines, and no longer sent.
+   *
+   * Was genuinely populated -- verified live on 2 August 2026, 153 of 167
+   * machines carrying orders, 724 in total. On 6 August 2026 Facepunch
+   * stripped every marker except Player from the Rust+ feed
+   * (commits.facepunch.com/612220), so this now arrives empty on every
+   * server, along with the crate, cargo, CH47 and helicopter markers the
+   * event detector is built on.
+   *
+   * Kept because the shape is still correct and the change may be reverted;
+   * `VendingStore.hasVendingData` is what decides whether to trust it.
    */
   sellOrders?: {
     itemId?: number;

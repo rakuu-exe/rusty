@@ -5,7 +5,8 @@ import { loadItems, findItem, itemName } from '../src/vending/items.js';
 import { describeVendingEvent, isAnnounceableVendingEvent, joinCapped } from '../src/vending/format.js';
 import { ALIAS_DISPLAY } from '../src/vending/aliases.js';
 import type { VendingEvent } from '../src/vending/types.js';
-import { resolveVendingCommand } from '../src/vending/commands.js';
+import { VENDING_UNAVAILABLE, resolveVendingCommand } from '../src/vending/commands.js';
+import { MAX_CHAT_LENGTH } from '../src/vending/format.js';
 import { MarkerType, type RustMapMarker } from '../src/rustplus/types.js';
 import type { SellOrder, VendingMachine } from '../src/vending/types.js';
 
@@ -44,6 +45,22 @@ const deps = (store: VendingStore) => ({
   store,
   formatClock: (d: Date) => d.toISOString().slice(11, 16),
 });
+
+/**
+ * A store that has seen the map: two shops, both selling Scrap.
+ *
+ * Commands refuse to answer a store that has never seen a shop, so "no shops
+ * on the map" is not a stand-in for "this item is not listed" -- the two now
+ * give different replies, and a test wanting the second has to say so.
+ */
+function stocked(): VendingStore {
+  const store = new VendingStore();
+  store.update([
+    machine({ id: 1, name: 'Cheap', grid: 'D12', orders: [order({ itemId: SCRAP, costPerItem: 5 })] }),
+    machine({ id: 2, name: 'Pricey', grid: 'N13', orders: [order({ itemId: SCRAP, costPerItem: 25 })] }),
+  ]);
+  return store;
+}
 
 describe('item lookup', () => {
   it('loads the bundled dataset', () => {
@@ -261,15 +278,6 @@ describe('decoding markers', () => {
 });
 
 describe('commands', () => {
-  function stocked(): VendingStore {
-    const store = new VendingStore();
-    store.update([
-      machine({ id: 1, name: 'Cheap', grid: 'D12', orders: [order({ itemId: SCRAP, costPerItem: 5 })] }),
-      machine({ id: 2, name: 'Pricey', grid: 'N13', orders: [order({ itemId: SCRAP, costPerItem: 25 })] }),
-    ]);
-    return store;
-  }
-
   it('!vend lists current sellers cheapest first', () => {
     const reply = resolveVendingCommand('vend', 'scrap', deps(stocked()))!;
     expect(reply).toContain('Scrap');
@@ -278,7 +286,8 @@ describe('commands', () => {
   });
 
   it('!vend says so when nothing is listed', () => {
-    expect(resolveVendingCommand('vend', 'wood', deps(new VendingStore()))).toContain('not sold anywhere');
+    // Shops are visible, they just do not stock wood.
+    expect(resolveVendingCommand('vend', 'wood', deps(stocked()))).toContain('not sold anywhere');
   });
 
   it('!price summarises the spread', () => {
@@ -297,7 +306,8 @@ describe('commands', () => {
   });
 
   it('!vendhistory reports session history only', () => {
-    const empty = resolveVendingCommand('vendhistory', 'scrap', deps(new VendingStore()))!;
+    // Wood was never listed, so nothing was ever watched changing.
+    const empty = resolveVendingCommand('vendhistory', 'wood', deps(stocked()))!;
     expect(empty).toContain('no history this session');
   });
 
@@ -333,6 +343,58 @@ describe('commands', () => {
     }
 
     expect(store.listTrackers()).toHaveLength(0);
+  });
+
+  /**
+   * Facepunch removed shop markers from Rust+ on 6 August 2026, so the store
+   * now stays empty forever. The bot must say that rather than answer as if
+   * it had looked.
+   */
+  describe('when the feed carries no shops at all', () => {
+    const blind = () => deps(new VendingStore());
+
+    it('refuses to claim an item is unsold', () => {
+      const reply = resolveVendingCommand('vend', 'scrap', blind())!;
+      expect(reply).not.toContain('not sold anywhere');
+      expect(reply).toContain('6 Aug 2026');
+    });
+
+    it('says the same for every command that needs shop data', () => {
+      for (const c of ['vend', 'price', 'vendstats', 'vendcommon', 'vendhistory', 'vendtrack']) {
+        expect(resolveVendingCommand(c, 'scrap', blind()), `!${c}`).toBe(VENDING_UNAVAILABLE);
+      }
+    });
+
+    it('does not report zero shops as a fact about the server', () => {
+      expect(resolveVendingCommand('vendstats', '', blind())).not.toContain('0 shops');
+    });
+
+    it('still answers what does not depend on the feed', () => {
+      // Item names and the command list are local data, not marker data.
+      expect(resolveVendingCommand('vendsearch', 'ak', blind())).toContain('Assault Rifle');
+      expect(resolveVendingCommand('vendhelp', '', blind())).toContain('!vend');
+    });
+
+    it('fits a chat line', () => {
+      expect(VENDING_UNAVAILABLE.length).toBeLessThanOrEqual(MAX_CHAT_LENGTH);
+    });
+
+    it('resumes on its own if the data ever comes back', () => {
+      const store = new VendingStore();
+      expect(store.hasVendingData).toBe(false);
+
+      store.update([machine({ orders: [order({ itemId: SCRAP })] })]);
+
+      expect(store.hasVendingData).toBe(true);
+      expect(resolveVendingCommand('vend', 'scrap', deps(store))).toContain('N13');
+    });
+
+    it('does not forget on a single empty snapshot', () => {
+      // An empty poll is a feed glitch; one shop seen is proof the feed works.
+      const store = stocked();
+      store.update([]);
+      expect(store.hasVendingData).toBe(true);
+    });
   });
 
   it('returns null for commands it does not own', () => {
@@ -542,7 +604,7 @@ describe('every vending reply fits a Rust chat line', () => {
  * wants placeholder syntax.
  */
 describe('replies survive Rust chat encoding', () => {
-  const store = new VendingStore();
+  const store = stocked();
 
   const everyReply = [
     resolveVendingCommand('vend', '', deps(store)),

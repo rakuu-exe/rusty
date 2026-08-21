@@ -55,6 +55,7 @@ export class ServerRuntime {
   private readonly selfMessages = new SelfMessageTracker();
   /** Vending session state. In memory by design: history is session-scoped. */
   private readonly vending = new VendingStore();
+  private loggedFirstVendingSnapshot = false;
   /** Rebuilt on every connection, since a wipe invalidates world state. */
   private detector: EventDetector | null = null;
   /**
@@ -246,6 +247,27 @@ export class ServerRuntime {
   private async onVendingSnapshot(markers: RustMapMarker[], mapSize: number): Promise<void> {
     const machines = toVendingMachines(markers, mapSize);
     const events = this.vending.update(machines);
+
+    /**
+     * Say once what the feed actually carried.
+     *
+     * The poller logs its first marker poll, but a count of markers by type
+     * does not say whether vending got anything usable, and an empty store is
+     * invisible: every command still answers, just wrongly. Since Facepunch
+     * dropped shop markers on 6 August 2026 this reliably logs zero, which is
+     * the point -- the alternative was a bot that looked healthy while
+     * answering questions it had no data for.
+     */
+    if (!this.loggedFirstVendingSnapshot) {
+      this.loggedFirstVendingSnapshot = true;
+      const orders = machines.reduce((n, m) => n + m.orders.length, 0);
+      logger.info(
+        { machines: machines.length, orders, markers: markers.length },
+        machines.length === 0
+          ? 'no vending machines in the marker feed; vending commands will say so'
+          : 'vending snapshot received',
+      );
+    }
 
     for (const event of events.filter((e) => isAnnounceableVendingEvent(e.kind))) {
       // Two renderings of the same change: Discord has room for full item

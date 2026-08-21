@@ -40,6 +40,24 @@ export class VendingStore {
   private machines = new Map<number, VendingMachine>();
   private primed = false;
 
+  /**
+   * Whether a vending machine has ever been seen.
+   *
+   * Facepunch removed every map marker except players from the Rust+ feed on
+   * 6 August 2026 (commits.facepunch.com/612220), so on current servers this
+   * stays false forever and the store is permanently empty.
+   *
+   * An empty store and a map with no shops on it are indistinguishable from
+   * inside `findListings`, but they are not the same answer: "nobody sells an
+   * AK" is a claim about the server, and making it while blind is simply
+   * wrong. Everything that would otherwise state it checks this first.
+   *
+   * It is observed rather than configured so it heals itself: if the data
+   * comes back, the first snapshot carrying a machine flips it and every
+   * command resumes with no redeploy.
+   */
+  private sawMachine = false;
+
   /** itemId -> observed price points, newest last. */
   private readonly history = new Map<number, PricePoint[]>();
   private readonly events: VendingEvent[] = [];
@@ -47,6 +65,11 @@ export class VendingStore {
 
   get isPrimed(): boolean {
     return this.primed;
+  }
+
+  /** False when the marker feed has never carried a shop. See `sawMachine`. */
+  get hasVendingData(): boolean {
+    return this.sawMachine;
   }
 
   get machineCount(): number {
@@ -64,6 +87,10 @@ export class VendingStore {
    */
   update(snapshot: VendingMachine[], now: Date = new Date()): VendingEvent[] {
     const current = new Map(snapshot.map((m) => [m.id, m]));
+
+    // Latched, not recomputed: one shop seen once is proof the feed carries
+    // them, and a momentary empty snapshot must not retract that.
+    if (snapshot.length > 0) this.sawMachine = true;
 
     if (!this.primed) {
       this.machines = current;

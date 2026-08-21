@@ -243,7 +243,7 @@ const COMMANDS: readonly ChatCommand[] = [
   },
 
   // ---- meta -----------------------------------------------------------------
-  { names: ['help'], run: (c) => helpText(c.deps.prefix) },
+  { names: ['help'], run: (c) => helpText(c.deps.prefix, c.deps.vending?.hasVendingData ?? false) },
 ];
 
 /** Trigger word to command, including aliases. Built once. */
@@ -251,10 +251,18 @@ const BY_NAME = new Map<string, ChatCommand>(
   COMMANDS.flatMap((command) => command.names.map((name) => [name, command] as const)),
 );
 
-/** `!help` text, derived from the tables so it cannot drift out of date. */
-function helpText(prefix: string): string {
+/**
+ * `!help` text, derived from the tables so it cannot drift out of date.
+ *
+ * The vending half is dropped when the server sends no shop data, which since
+ * 6 August 2026 is every server. Nine commands that can only answer "no shop
+ * data" are worse than absent on a 128-character line: they crowd out the
+ * commands that do work, and they promise something the bot cannot deliver.
+ */
+function helpText(prefix: string, hasVendingData: boolean): string {
   const own = COMMANDS.map((c) => (c.usage ? `${c.names[0]} ${c.usage}` : c.names[0]!));
-  return `Commands: ${[...own, ...VENDING_COMMAND_USAGE].map((c) => prefix + c).join(' ')}`;
+  const vending = hasVendingData ? VENDING_COMMAND_USAGE : [];
+  return `Commands: ${[...own, ...vending].map((c) => prefix + c).join(' ')}`;
 }
 
 /**

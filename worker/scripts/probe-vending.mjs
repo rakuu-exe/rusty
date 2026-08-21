@@ -5,6 +5,11 @@
  * populating it are different things — crate markers are declared too and are
  * never sent. This checks before any vending feature is built on the
  * assumption that the data exists.
+ *
+ * As of 6 August 2026 the answer is no, on every server: Facepunch removed all
+ * non-player map markers from the Rust+ API (commits.facepunch.com/612220).
+ * This script is now the way to notice if that is ever reverted — a non-zero
+ * count here means vending can come back.
  */
 
 import { existsSync } from 'node:fs';
@@ -28,8 +33,24 @@ function decrypt(payload) {
   return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString('utf8');
 }
 
-const servers = await (await fetch(`${url}/rest/v1/rust_servers?select=*&is_active=eq.true`, { headers })).json();
-const server = servers[0];
+/**
+ * Optional argument names a server to probe instead of the active one, matched
+ * on any part of its name. "Does this server publish shop markers at all?" is
+ * only answerable by comparing servers, and the paired credentials for the
+ * inactive ones are still on file.
+ */
+const wanted = process.argv[2]?.toLowerCase();
+const query = wanted ? 'select=*' : 'select=*&is_active=eq.true';
+
+const servers = await (await fetch(`${url}/rest/v1/rust_servers?${query}`, { headers })).json();
+const server = wanted ? servers.find((s) => s.name.toLowerCase().includes(wanted)) : servers[0];
+
+if (!server) {
+  console.error(`no server matching "${process.argv[2]}" -- known: ${servers.map((s) => s.name).join(', ')}`);
+  process.exit(1);
+}
+
+console.log(`server: ${server.name}\n`);
 
 const rustplus = new RustPlus(server.server_ip, server.app_port, server.player_id, decrypt(server.player_token));
 const timeout = setTimeout(() => { console.error('timed out'); process.exit(1); }, 30_000);
